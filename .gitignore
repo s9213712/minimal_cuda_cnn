@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Native build outputs
+*.so
+*.o
+
+# Large local CIFAR-10 batches
+data/cifar-10-batches-py/data_batch_*
+data/cifar-10-batches-py/test_batch
