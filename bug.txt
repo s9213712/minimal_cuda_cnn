@@ -1,0 +1,324 @@
+我逐層對完了，結論是：
+
+先更正一件事
+
+我前面說「grad_weights / grad_input 沒清零」是主因，這版專案裡不是主因。
+因為你在 train_split.py 裡每次 backward 前，確實都用 gpu_zeros(...) 配新的梯度 buffer 了：
+
+* d_w_conv4_grad = gpu_zeros(...)
+* d_conv3_grad = gpu_zeros(...)
+* d_conv4_grad_raw = gpu_zeros(...)
+* d_conv2_grad_raw = gpu_zeros(...)
+
+所以梯度殘留不是這版的核心 bug。
+
+⸻
+
+真正比較可疑的點
+
+我把 conv / pool backward 拆開看後，判斷如下：
+
+1. conv_backward.cu 本身大方向是對的
+
+你的卷積 backward 兩部分：
+
+* grad_weights += input * grad_out
+* grad_input = sum(grad_out * weights)
+
+索引邏輯看起來是合理的，對應的是 valid conv / stride=1 / no padding。
+
+grad_weights
+
+atomicAdd(&grad_weights[...],
+          input[((n * C + c) * H + h_in) * W + w_in] *
+          grad_out[oc * (N * outH * outW) + col]);
+
+grad_input
+
+sum += grad_out[g_out_idx] * weights[w_idx];
+grad_input[idx] = sum;
+
+這裡我沒有看到那種「一眼就爆」的索引錯位。
+
+⸻
+
+2. MaxPool backward 也基本正確
+
+你現在實際用的是 maxpool_backward_use_idx.cu，它是靠 forward 存下來的 max_idx 直接回填梯度：
+
+int linear_idx = max_idx[idx];
+atomicAdd(&grad_input[linear_idx], grad_out[idx]);
+
+而 forward 的 maxpool_store.cu 也確實把 max_idx 存成 CNHW input 的線性索引：
+
+int linear_idx = ((c * N + n) * H + in_h) * W + in_w;
+max_idx[out_idx] = max_linear_idx;
+
+這一組 forward / backward 是對得上的。
+
+⸻
+
+真的比較像 bug 的地方：layout 與 backward 鏈路混用
+
+你這份程式最大風險不是單一 kernel 爆掉，而是：
+
+同一層有些 tensor 用 NCHW，有些用 CNHW，然後 backward 時在不同 layout 之間來回轉換。
+
+這種最容易出現「不是完全錯，但梯度品質很差」。
+
+⸻
+
+3. 你的 Conv forward output 是 CNHW
+
+在 conv_forward()：
+
+lib.gemm_forward(d_weight, d_col, d_raw, out_c, n * out_h * out_w, in_c * KH * KW)
+lib.leaky_relu_forward(d_raw, ...)
+
+這裡 gemm_forward 產生的 d_raw 形狀其實是：
+
+* row = out_c
+* col = n * out_h * out_w
+
+也就是 C × (N·H·W)
+
+你後面把它當 CNHW 用，這是合理的。
+
+⸻
+
+4. 但 Conv backward 的 input 是吃 NCHW
+
+例如 Conv4 backward：
+
+lib.conv_backward(
+    d_conv4_grad_raw, d_conv3_nchw, d_w_conv4, d_w_conv4_grad, d_conv3_grad,
+    BATCH, C4_IN, H3, W3, KH, KW, H4, W4, C4_OUT,
+)
+
+這裡：
+
+* d_conv4_grad_raw 是 CNHW
+* d_conv3_nchw 是 NCHW
+* conv_backward.cu 裡的 grad_out 讀法是 CNHW
+* input 讀法是 NCHW
+
+這個設計本身可以成立，但要求你整條鏈都非常一致。
+你目前最大的問題是：前向和反向在 layout 上切來切去，太容易讓某層的梯度語意偏掉。
+
+⸻
+
+我認為最可疑的 3 個實際點
+
+A. leaky_relu_backward() 用的是「激活後的值」
+
+你的 kernel：
+
+grad[idx] = (data[idx] > 0) ? grad[idx] : alpha * grad[idx];
+
+而你傳進去的 data 是像 d_conv4_raw 這種已經做完 LeakyReLU forward 後的輸出。
+
+這對 LeakyReLU 其實通常還能成立，因為：
+
+* 若原值 > 0，輸出 > 0
+* 若原值 < 0，輸出也仍 < 0（只是乘上 alpha）
+
+所以這裡不是主 bug。
+但如果未來你換成普通 ReLU 或其他 activation，這種寫法就會出事。
+
+判斷
+
+* 不是這次 38% 的主兇
+* 但不是最穩的寫法
+
+⸻
+
+B. FC backward 多除了一次 batch
+
+你這裡：
+
+d_loss = probs - labels_onehot
+grad_fc_w = (d_loss.T @ h_pool2) / BATCH
+grad_fc_b = d_loss.sum(axis=0) / BATCH
+grad_pool2 = (d_loss @ fc_w.reshape(10, FC_IN)) / BATCH
+
+注意：
+
+d_loss = softmax - onehot
+如果 loss 是 mean cross-entropy，常見做法是：
+
+d_logits = (probs - onehot) / BATCH
+
+然後後面：
+
+* grad_w = d_logits.T @ x
+* grad_input = d_logits @ W
+
+但你現在是：
+
+* d_loss 沒先除 batch
+* grad_fc_w 除一次
+* grad_fc_b 除一次
+* grad_pool2 也除一次
+
+這代表傳回卷積端的梯度被縮小了。
+而且卷積更新那邊又有：
+
+h_grad = g2h(d_grad, size).reshape(-1) / BATCH
+
+也就是 conv weight gradient 又再除一次 BATCH
+
+這會造成什麼
+
+不是方向錯，而是：
+
+卷積層梯度整體偏小，學得很慢。
+
+這和你現在的曲線非常像：
+有學，但整個 CNN 學不深，最後只到 38~39%。
+
+⸻
+
+C. Conv gradient scaling 不一致
+
+你的 conv kernel 裡 grad_weights 是把整個 batch、所有 spatial 的貢獻直接加總：
+
+atomicAdd(&grad_weights[...], input * grad_out)
+
+但更新前只做了：
+
+h_grad = g2h(d_grad, size).reshape(-1) / BATCH
+
+也就是只除 BATCH，沒有除 outH * outW。
+
+這不一定錯，因為 learning rate 可以吸收比例。
+但問題是 FC 那邊和 Conv 那邊的梯度尺度完全不同步，容易導致：
+
+* FC 學得比 conv 快很多
+* conv 特徵學習不足
+* 整體像「FC 在硬撐分類」
+
+這也很符合你最後只有 38.9% 的樣子。
+
+⸻
+
+我的判斷排名
+
+最可疑主因
+
+1) 梯度 scaling 鏈路不一致
+
+尤其是：
+
+* grad_pool2 = (...) / BATCH
+* conv update 前又 / BATCH
+* FC 跟 Conv 的尺度不一致
+
+這是我現在最懷疑的主因。
+
+⸻
+
+次可疑
+
+2) CNHW / NCHW 混用太多
+
+kernel 單看沒明顯爆，但整條 backward 鏈太容易有語意偏差。
+這種很常造成：
+
+* 不會 nan
+* 不會完全不學
+* 但表現明顯低很多
+
+⸻
+
+比較不像主因
+
+3) pool backward kernel 本身壞掉
+
+我目前看 maxpool_forward_store.cu + maxpool_backward_use_idx.cu 是對得上的。
+
+⸻
+
+我最建議你先改的地方
+
+改 1：把 FC 到 Conv 的梯度縮放先統一
+
+現在先改成這樣：
+
+d_logits = (probs - labels_onehot) / BATCH
+grad_fc_w = d_logits.T @ h_pool2
+grad_fc_b = d_logits.sum(axis=0)
+grad_pool2 = d_logits @ fc_w.reshape(10, FC_IN)
+
+也就是：
+
+* 只在 d_logits 這一步除一次 BATCH
+* 後面不要再除
+
+⸻
+
+改 2：Conv update 前先不要再 / BATCH
+
+把：
+
+h_grad = g2h(d_grad, size).reshape(-1) / BATCH
+
+改成：
+
+h_grad = g2h(d_grad, size).reshape(-1)
+
+先測一次。
+
+因為你前面傳到 conv 的梯度很可能已經夠小了，再 / BATCH 會讓卷積幾乎學不動。
+
+⸻
+
+改 3：做 100 張 overfit test
+
+這是最準的驗證。
+
+若修完 scaling 後，100 張資料還是 overfit 不到接近 100%，那我下一步就會直接懷疑：
+
+* layout 轉換某段有語意錯位
+* 或 conv backward 的某段索引雖然看似合理，但和 forward 的 memory interpretation 不完全一致
+
+⸻
+
+直接給你一版最值得先試的修改
+
+把這段：
+
+d_loss = probs - labels_onehot
+grad_fc_w = (d_loss.T @ h_pool2) / BATCH
+grad_fc_b = d_loss.sum(axis=0) / BATCH
+grad_pool2 = (d_loss @ fc_w.reshape(10, FC_IN)) / BATCH
+
+改成：
+
+d_logits = (probs - labels_onehot) / BATCH
+grad_fc_w = d_logits.T @ h_pool2
+grad_fc_b = d_logits.sum(axis=0)
+grad_pool2 = d_logits @ fc_w.reshape(10, FC_IN)
+
+再把這段：
+
+h_grad = g2h(d_grad, size).reshape(-1) / BATCH
+
+改成：
+
+h_grad = g2h(d_grad, size).reshape(-1)
+
+⸻
+
+最後一句判斷
+
+這次逐層核對後，我的結論是：
+
+pool backward 本身看起來沒壞；conv backward kernel 本身也沒有明顯索引大錯。
+
+真正更像是 gradient scaling 錯配 + layout 混用讓卷積端學習太弱。
+
+你要的下一步，最有效的是我直接幫你做：
+
+「把 train_split.py 的 backward 縮放修成一致版本」
+
+我可以直接貼你可覆蓋的修改版。

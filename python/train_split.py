@@ -115,7 +115,7 @@ def maxpool_forward(d_input_cnhw, n, c, h, w):
 
 
 def update_conv(d_weight, d_grad, lr, size):
-    h_grad = g2h(d_grad, size).reshape(-1) / BATCH
+    h_grad = g2h(d_grad, size).reshape(-1)
     h_grad_clip = np.clip(h_grad, -1.0, 1.0).astype(np.float32)
     lib.gpu_memcpy_h2d(d_grad, h_grad_clip.ctypes.data, size * 4)
     lib.apply_sgd_update(d_weight, d_grad, c_float(lr), size)
@@ -302,11 +302,11 @@ for epoch in range(EPOCHS):
 
         labels_onehot = np.zeros((BATCH, 10), dtype=np.float32)
         labels_onehot[np.arange(BATCH), y] = 1.0
-        d_loss = probs - labels_onehot
+        d_logits = (probs - labels_onehot) / BATCH
 
-        grad_fc_w = (d_loss.T @ h_pool2) / BATCH
-        grad_fc_b = d_loss.sum(axis=0) / BATCH
-        grad_pool2 = (d_loss @ fc_w.reshape(10, FC_IN)) / BATCH
+        grad_fc_w = d_logits.T @ h_pool2
+        grad_fc_b = d_logits.sum(axis=0)
+        grad_pool2 = d_logits @ fc_w.reshape(10, FC_IN)
 
         d_fc_grad_w = upload(np.clip(grad_fc_w, -1.0, 1.0).astype(np.float32))
         lib.apply_sgd_update(d_fc_w, d_fc_grad_w, c_float(LR_FC), 10 * FC_IN)
