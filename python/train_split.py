@@ -38,6 +38,7 @@ from train_config import (
     C3_OUT,
     C4_IN,
     C4_OUT,
+    CONV_GRAD_SPATIAL_NORMALIZE,
     DATASET_SEED,
     EARLY_STOP_PATIENCE,
     EPOCHS,
@@ -186,7 +187,7 @@ for epoch in range(EPOCHS):
 
         labels_onehot = np.zeros((BATCH, 10), dtype=np.float32)
         labels_onehot[np.arange(BATCH), y] = 1.0
-        # Mean cross-entropy scaling belongs here. Do not divide downstream conv gradients again.
+        # Batch scaling belongs here. Conv updates optionally add per-layer spatial normalization.
         d_logits = (probs - labels_onehot) / BATCH
 
         grad_fc_w = d_logits.T @ h_pool2
@@ -224,7 +225,9 @@ for epoch in range(EPOCHS):
         )
         update_conv(
             d_w_conv4, d_w_conv4_grad, d_v_conv4, current_lr_conv, MOMENTUM, C4_OUT * C4_IN * KH * KW,
-            "conv4", WEIGHT_DECAY, GRAD_CLIP_CONV, log_grad,
+            "conv4", WEIGHT_DECAY, GRAD_CLIP_CONV,
+            H4 * W4 if CONV_GRAD_SPATIAL_NORMALIZE else 1.0,
+            log_grad,
         )
 
         # Conv3 backward.
@@ -238,7 +241,9 @@ for epoch in range(EPOCHS):
         )
         update_conv(
             d_w_conv3, d_w_conv3_grad, d_v_conv3, current_lr_conv, MOMENTUM, C3_OUT * C3_IN * KH * KW,
-            "conv3", WEIGHT_DECAY, GRAD_CLIP_CONV, log_grad,
+            "conv3", WEIGHT_DECAY, GRAD_CLIP_CONV,
+            H3 * W3 if CONV_GRAD_SPATIAL_NORMALIZE else 1.0,
+            log_grad,
         )
 
         # Conv2 backward.
@@ -254,7 +259,9 @@ for epoch in range(EPOCHS):
         )
         update_conv(
             d_w_conv2, d_w_conv2_grad, d_v_conv2, current_lr_conv, MOMENTUM, C2_OUT * C2_IN * KH * KW,
-            "conv2", WEIGHT_DECAY, GRAD_CLIP_CONV, log_grad,
+            "conv2", WEIGHT_DECAY, GRAD_CLIP_CONV,
+            H2 * W2 if CONV_GRAD_SPATIAL_NORMALIZE else 1.0,
+            log_grad,
         )
 
         # Conv1 backward.
@@ -268,7 +275,9 @@ for epoch in range(EPOCHS):
         )
         update_conv(
             d_w_conv1, d_w_conv1_grad, d_v_conv1, current_lr_conv1, MOMENTUM, C1_OUT * C1_IN * KH * KW,
-            "conv1", WEIGHT_DECAY, GRAD_CLIP_CONV, log_grad,
+            "conv1", WEIGHT_DECAY, GRAD_CLIP_CONV,
+            H1 * W1 if CONV_GRAD_SPATIAL_NORMALIZE else 1.0,
+            log_grad,
         )
 
         for ptr in [

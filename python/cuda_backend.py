@@ -88,8 +88,21 @@ def maxpool_forward(d_input_cnhw, n, c, h, w):
     return d_pool, d_idx, out_h, out_w
 
 
-def update_conv(d_weight, d_grad, d_velocity, lr, momentum, size, name, weight_decay, clip_value, log_grad=False):
+def update_conv(
+    d_weight,
+    d_grad,
+    d_velocity,
+    lr,
+    momentum,
+    size,
+    name,
+    weight_decay,
+    clip_value,
+    grad_normalizer=1.0,
+    log_grad=False,
+):
     h_grad = g2h(d_grad, size).reshape(-1)
+    h_grad = h_grad / grad_normalizer
     h_weight = g2h(d_weight, size).reshape(-1)
     h_grad = h_grad + weight_decay * h_weight
     if log_grad:

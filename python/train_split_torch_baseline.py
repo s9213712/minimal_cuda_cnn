@@ -20,6 +20,7 @@ from train_config import (
     C3_OUT,
     C4_IN,
     C4_OUT,
+    CONV_GRAD_SPATIAL_NORMALIZE,
     DATASET_SEED,
     EARLY_STOP_PATIENCE,
     EPOCHS,
@@ -112,16 +113,18 @@ def init_velocity_buffers(model):
 
 def apply_momentum_update(model, velocity, lr_conv1, lr_conv, lr_fc):
     updates = [
-        (model.conv1.weight, lr_conv1, GRAD_CLIP_CONV, True),
-        (model.conv2.weight, lr_conv, GRAD_CLIP_CONV, True),
-        (model.conv3.weight, lr_conv, GRAD_CLIP_CONV, True),
-        (model.conv4.weight, lr_conv, GRAD_CLIP_CONV, True),
-        (model.fc.weight, lr_fc, GRAD_CLIP_FC, True),
-        (model.fc.bias, lr_fc, GRAD_CLIP_BIAS, False),
+        (model.conv1.weight, lr_conv1, GRAD_CLIP_CONV, True, H1 * W1),
+        (model.conv2.weight, lr_conv, GRAD_CLIP_CONV, True, H2 * W2),
+        (model.conv3.weight, lr_conv, GRAD_CLIP_CONV, True, H3 * W3),
+        (model.conv4.weight, lr_conv, GRAD_CLIP_CONV, True, H4 * W4),
+        (model.fc.weight, lr_fc, GRAD_CLIP_FC, True, 1),
+        (model.fc.bias, lr_fc, GRAD_CLIP_BIAS, False, 1),
     ]
     with torch.no_grad():
-        for param, lr, clip_value, use_decay in updates:
+        for param, lr, clip_value, use_decay, grad_normalizer in updates:
             grad = param.grad
+            if CONV_GRAD_SPATIAL_NORMALIZE:
+                grad = grad / grad_normalizer
             if use_decay:
                 grad = grad + WEIGHT_DECAY * param
             grad = torch.clamp(grad, -clip_value, clip_value)
@@ -134,7 +137,9 @@ def evaluate(model, x, y, device, batch_size=BATCH, max_batches=EVAL_MAX_BATCHES
     model.eval()
     correct = 0
     total = 0
-    nbatches = min(x.shape[0] // batch_size, max_batches)
+    nbatches = x.shape[0] // batch_size
+    if max_batches is not None:
+        nbatches = min(nbatches, max_batches)
     with torch.no_grad():
         for i in range(nbatches):
             idx_s = i * batch_size

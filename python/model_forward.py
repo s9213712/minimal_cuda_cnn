@@ -75,7 +75,9 @@ def forward_batch(x, device_weights):
 def evaluate(x, y, device_weights, batch_size=BATCH, max_batches=EVAL_MAX_BATCHES):
     correct = 0
     total = 0
-    nbatches = min(x.shape[0] // batch_size, max_batches)
+    nbatches = x.shape[0] // batch_size
+    if max_batches is not None:
+        nbatches = min(nbatches, max_batches)
     for i in range(nbatches):
         idx_s = i * batch_size
         idx_e = idx_s + batch_size

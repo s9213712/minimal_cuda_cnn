@@ -77,7 +77,7 @@ minimal_cuda_cnn/
 |---|---|
 | `train_split.py` | 手寫 CUDA CIFAR-10 trainer。主要保留訓練 loop、backward pass、scheduler、early stopping。 |
 | `train_split_torch_baseline.py` | PyTorch baseline。使用同一個資料切分、模型架構、初始權重、Momentum SGD 條件，方便和 CUDA trainer 比較。 |
-| `train_config.py` | 共享訓練參數與模型 shape。包含 `BATCH`、`EPOCHS`、`LR_*`、`MOMENTUM`、`WEIGHT_DECAY`、gradient clipping、train/val split 與 conv shape。 |
+| `train_config.py` | 共享訓練參數與模型 shape。包含 full CIFAR `45000/5000` split、`BATCH`、`EPOCHS`、`LR_*`、`MOMENTUM`、`WEIGHT_DECAY`、gradient clipping、conv spatial gradient normalization 與 conv shape。 |
 | `cifar10_data.py` | CIFAR-10 batch 讀取、train/val/test split、CIFAR mean/std normalization。 |
 | `cuda_backend.py` | Python `ctypes` binding、`.so` 載入、GPU memory helper、conv/maxpool helper、Momentum conv update helper。 |
 | `model_init.py` | CPU 端共享 initial weights。CUDA trainer 和 PyTorch baseline 都從這裡取得同一組初始權重。 |

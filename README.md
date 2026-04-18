@@ -1,5 +1,7 @@
 # Minimal CUDA CNN
 
+[繁體中文 README](README.zh-TW.md)
+
 Minimal CUDA CNN is an experimental CUDA/C++ and Python project for training and debugging a small CIFAR-10 CNN without using a deep-learning framework for the handwritten implementation path.
 
 The repository contains:
@@ -17,8 +19,8 @@ The repository contains:
 Both the handwritten CUDA trainer and the PyTorch baseline use the same comparison conditions:
 
 - Dataset: CIFAR-10 Python batches under `data/cifar-10-batches-py`
-- Train source: `data_batch_1`
-- Split: `8000` train / `2000` validation
+- Train source: `data_batch_1` through `data_batch_5`
+- Split: `45000` train / `5000` validation
 - Test: official `test_batch`
 - Dataset split seed: `42`
 - Initial weight seed: `42`
@@ -31,6 +33,7 @@ Both the handwritten CUDA trainer and the PyTorch baseline use the same comparis
 - Optimizer behavior: manual Momentum SGD updates, weight decay, gradient clipping, and LR plateau reduction
 - Initial learning rates: `0.002` for conv1, other conv layers, and FC
 - Momentum: `0.9`
+- Conv gradient spatial normalization: enabled per layer using that layer's output `H*W`
 
 Architecture:
 
@@ -112,13 +115,11 @@ data/cifar-10-batches-py/
   test_batch
 ```
 
-The current experiment only trains from `data_batch_1`, controlled by `TRAIN_BATCH_IDS = (1,)` in `python/train_config.py`.
-
-To compare on all five CIFAR-10 training batches, update:
+The current experiment uses all five CIFAR-10 training batches, controlled in `python/train_config.py`:
 
 ```python
-N_TRAIN = 40000
-N_VAL = 10000
+N_TRAIN = 45000
+N_VAL = 5000
 TRAIN_BATCH_IDS = (1, 2, 3, 4, 5)
 ```
 
@@ -152,7 +153,7 @@ python/best_model_split_torch.pt
 
 That checkpoint is ignored by Git.
 
-Momentum baseline result from the current run on 2026-04-18:
+Previous Momentum baseline result from the older `data_batch_1`-only run on 2026-04-18:
 
 ```text
 Best validation accuracy: 63.26% at epoch 25
@@ -161,7 +162,7 @@ Early stopping:           epoch 33
 Device used:              CPU
 ```
 
-PyTorch reported `torch.cuda.is_available() == False` in this environment, so the baseline run above used CPU. The script automatically uses CUDA if PyTorch can see a CUDA device.
+The current full-dataset configuration has not been fully benchmarked yet. PyTorch reported `torch.cuda.is_available() == False` in this environment, so the baseline run above used CPU. The script automatically uses CUDA if PyTorch can see a CUDA device.
 
 ## Shared Object Documentation
 
