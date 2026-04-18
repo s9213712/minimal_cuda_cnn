@@ -68,7 +68,7 @@ FC(8*13*13 -> 10)
 Softmax cross entropy
 ```
 
-`torchvision.datasets.MNIST` 只用來讀資料，不使用 PyTorch 訓練。
+完整可執行版本已放在 [train_mnist_so.py](train_mnist_so.py)。該檔案不用 `torchvision`，只用 NumPy 與 Python 標準函式庫解析 MNIST IDX gzip 檔。
 
 ## 訓練流程骨架
 
@@ -118,37 +118,26 @@ conv_backward
 apply_sgd_update
 ```
 
-## 完整檔案建議
-
-可建立：
+## 完整範例檔
 
 ```text
-python/train_mnist_so.py
+docs/train_mnist_so.py
 ```
-
-完整程式可直接沿用這份骨架補上：
-
-1. `torchvision.datasets.MNIST` 讀取 `x_train/y_train/x_test/y_test`。
-2. He init 初始化 `w_conv` 與 `w_fc`。
-3. 每個 batch 呼叫 `forward`。
-4. 在 CPU 計算 softmax loss 與 `grad_logits`。
-5. 呼叫 CUDA backward API 與 `apply_sgd_update`。
-6. 每個 batch 結束 `free_all(...)`。
 
 執行：
 
 ```bash
 cd /home/s92137/NN/minimal_cuda_cnn
 make -C cpp
-python3 -u python/train_mnist_so.py
+python3 -u docs/train_mnist_so.py --download
 ```
 
-第一次執行 `torchvision.datasets.MNIST(..., download=True)` 需要網路下載資料。如果機器不能連網，請先把 MNIST 放到 `data/MNIST/raw/`。
+第一次執行若本機沒有 MNIST，使用 `--download` 下載 gzip IDX 檔到 `data/mnist/`。如果機器不能連網，請先把四個 MNIST `.gz` 檔放到該目錄。
 
 ## 快速驗證
 
 ```bash
-cuda-memcheck python3 -u python/train_mnist_so.py
+cuda-memcheck python3 -u docs/train_mnist_so.py
 ```
 
 如果只想驗證 `.so` 函式本身，使用既有 sanity test：
@@ -157,4 +146,3 @@ cuda-memcheck python3 -u python/train_mnist_so.py
 python3 -u /tmp/so_function_check.py
 cuda-memcheck python3 -u /tmp/so_function_check.py
 ```
-
