@@ -15,3 +15,4 @@ bug.txt
 
 # Training checkpoints
 python/best_model_split.npz
+python/best_model_split_torch.pt

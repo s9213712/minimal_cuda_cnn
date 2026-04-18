@@ -6,248 +6,105 @@ Conv(3->32) -> LeakyReLU -> Conv(32->32) -> LeakyReLU -> MaxPool
 Conv(32->64) -> LeakyReLU -> Conv(64->64) -> LeakyReLU -> MaxPool
 FC(1600->10)
 """
-import ctypes
 import os
-import pickle
 import time
-from ctypes import c_float, c_int, c_void_p
+from ctypes import c_float
 
 import numpy as np
 
+from cifar10_data import load_cifar10, normalize_cifar
+from cuda_backend import (
+    cnhw_to_nchw_alloc,
+    conv_forward,
+    g2h,
+    gpu_zeros,
+    lib,
+    maxpool_forward,
+    nchw_to_cnhw_alloc,
+    update_conv,
+    upload,
+)
+from model_forward import evaluate
+from model_init import init_weights
+from model_weights import free_weights, reload_weights_from_checkpoint, save_checkpoint, upload_weights
+from train_config import (
+    BATCH,
+    BEST_MODEL_FILENAME,
+    C1_IN,
+    C1_OUT,
+    C2_IN,
+    C2_OUT,
+    C3_IN,
+    C3_OUT,
+    C4_IN,
+    C4_OUT,
+    DATASET_SEED,
+    EARLY_STOP_PATIENCE,
+    EPOCHS,
+    FC_IN,
+    GRAD_CLIP_BIAS,
+    GRAD_CLIP_CONV,
+    GRAD_CLIP_FC,
+    GRAD_DEBUG,
+    GRAD_DEBUG_BATCHES,
+    GRAD_POOL_CLIP,
+    H,
+    H1,
+    H2,
+    H3,
+    H4,
+    INIT_SEED,
+    KH,
+    KW,
+    LEAKY_ALPHA,
+    LR_CONV,
+    LR_CONV1,
+    LR_FC,
+    LR_PLATEAU_PATIENCE,
+    LR_REDUCE_FACTOR,
+    MIN_DELTA,
+    MIN_LR,
+    N_TRAIN,
+    N_VAL,
+    P1H,
+    P1W,
+    P2H,
+    P2W,
+    TRAIN_BATCH_IDS,
+    W,
+    W1,
+    W2,
+    W3,
+    W4,
+    WEIGHT_DECAY,
+)
+
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-so = os.path.join(ROOT, "cpp", "libminimal_cuda_cnn.so")
-lib = ctypes.CDLL(so)
-
-lib.gpu_malloc.argtypes = [ctypes.c_size_t]; lib.gpu_malloc.restype = c_void_p
-lib.gpu_free.argtypes = [c_void_p]
-lib.gpu_memcpy_h2d.argtypes = [c_void_p, c_void_p, ctypes.c_size_t]
-lib.gpu_memcpy_d2h.argtypes = [c_void_p, c_void_p, ctypes.c_size_t]
-lib.gpu_memset.argtypes = [c_void_p, c_int, ctypes.c_size_t]
-lib.im2col_forward.argtypes = [c_void_p, c_void_p, c_int, c_int, c_int, c_int, c_int, c_int, c_int, c_int]
-lib.gemm_forward.argtypes = [c_void_p, c_void_p, c_void_p, c_int, c_int, c_int]
-lib.leaky_relu_forward.argtypes = [c_void_p, c_float, c_int]
-lib.leaky_relu_backward.argtypes = [c_void_p, c_void_p, c_float, c_int]
-lib.dense_forward.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int]
-lib.apply_sgd_update.argtypes = [c_void_p, c_void_p, c_float, c_int]
-lib.nchw_to_cnhw.argtypes = [c_void_p, c_void_p, c_int, c_int, c_int, c_int]
-lib.cnhw_to_nchw.argtypes = [c_void_p, c_void_p, c_int, c_int, c_int, c_int]
-lib.maxpool_forward_store.argtypes = [c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int]
-lib.maxpool_backward_use_idx.argtypes = [c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int]
-lib.conv_backward.argtypes = [
-    c_void_p, c_void_p, c_void_p, c_void_p, c_void_p,
-    c_int, c_int, c_int, c_int, c_int, c_int, c_int, c_int, c_int,
-]
-
-BATCH = 64
-EPOCHS = 50
-LR_CONV1 = 0.003
-LR_CONV = 0.003
-LR_FC = 0.003
-LEAKY_ALPHA = 0.1
-GRAD_DEBUG = os.environ.get("GRAD_DEBUG") == "1"
-GRAD_DEBUG_BATCHES = int(os.environ.get("GRAD_DEBUG_BATCHES", "1"))
-WEIGHT_DECAY = 5e-4
-GRAD_CLIP_CONV = 1.0
-GRAD_CLIP_FC = 1.0
-GRAD_CLIP_BIAS = 5.0
-LR_PLATEAU_PATIENCE = 3
-LR_REDUCE_FACTOR = 0.5
-MIN_LR = 1e-5
-EARLY_STOP_PATIENCE = 8
-MIN_DELTA = 0.05
-BEST_MODEL_PATH = os.path.join(ROOT, "python", "best_model_split.npz")
-
-CIFAR_MEAN = np.array([0.4914, 0.4822, 0.4465], dtype=np.float32).reshape(1, 3, 1, 1)
-CIFAR_STD = np.array([0.2470, 0.2435, 0.2616], dtype=np.float32).reshape(1, 3, 1, 1)
-
-C1_IN, C1_OUT = 3, 32
-C2_IN, C2_OUT = 32, 32
-C3_IN, C3_OUT = 32, 64
-C4_IN, C4_OUT = 64, 64
-H, W = 32, 32
-KH, KW = 3, 3
-
-H1, W1 = H - KH + 1, W - KW + 1          # 30x30
-H2, W2 = H1 - KH + 1, W1 - KW + 1        # 28x28
-P1H, P1W = H2 // 2, W2 // 2              # 14x14
-H3, W3 = P1H - KH + 1, P1W - KW + 1      # 12x12
-H4, W4 = H3 - KH + 1, W3 - KW + 1        # 10x10
-P2H, P2W = H4 // 2, W4 // 2              # 5x5
-FC_IN = C4_OUT * P2H * P2W
+BEST_MODEL_PATH = os.path.join(ROOT, "python", BEST_MODEL_FILENAME)
 
 
-def g2h(ptr, size):
-    h = np.zeros(size, dtype=np.float32)
-    lib.gpu_memcpy_d2h(h.ctypes.data, ptr, size * 4)
-    return h
+def current_device_weights():
+    return d_w_conv1, d_w_conv2, d_w_conv3, d_w_conv4, d_fc_w, d_fc_b
 
 
-def normalize_cifar(x):
-    return ((x - CIFAR_MEAN) / CIFAR_STD).astype(np.float32)
-
-
-def gpu_zeros(size):
-    ptr = lib.gpu_malloc(size * 4)
-    lib.gpu_memset(ptr, 0, size * 4)
-    return ptr
-
-
-def upload(arr):
-    arr = np.ascontiguousarray(arr.astype(np.float32, copy=False))
-    ptr = lib.gpu_malloc(arr.size * 4)
-    lib.gpu_memcpy_h2d(ptr, arr.ctypes.data, arr.size * 4)
-    return ptr
-
-
-def cnhw_to_nchw_alloc(d_cnhw, n, c, h, w):
-    d_nchw = lib.gpu_malloc(n * c * h * w * 4)
-    lib.cnhw_to_nchw(d_cnhw, d_nchw, n, c, h, w)
-    return d_nchw
-
-
-def nchw_to_cnhw_alloc(d_nchw, n, c, h, w):
-    d_cnhw = lib.gpu_malloc(n * c * h * w * 4)
-    lib.nchw_to_cnhw(d_nchw, d_cnhw, n, c, h, w)
-    return d_cnhw
-
-
-def conv_forward(d_input_nchw, d_weight, n, in_c, in_h, in_w, out_c):
-    out_h, out_w = in_h - KH + 1, in_w - KW + 1
-    col_size = in_c * KH * KW * n * out_h * out_w
-    raw_size = out_c * n * out_h * out_w
-    d_col = lib.gpu_malloc(col_size * 4)
-    d_raw = lib.gpu_malloc(raw_size * 4)
-    lib.im2col_forward(d_input_nchw, d_col, n, in_c, in_h, in_w, KH, KW, out_h, out_w)
-    lib.gemm_forward(d_weight, d_col, d_raw, out_c, n * out_h * out_w, in_c * KH * KW)
-    lib.leaky_relu_forward(d_raw, c_float(LEAKY_ALPHA), raw_size)
-    return d_col, d_raw, out_h, out_w
-
-
-def maxpool_forward(d_input_cnhw, n, c, h, w):
-    out_h, out_w = h // 2, w // 2
-    out_size = c * n * out_h * out_w
-    d_pool = lib.gpu_malloc(out_size * 4)
-    d_idx = lib.gpu_malloc(out_size * 4)
-    lib.maxpool_forward_store(d_pool, d_input_cnhw, d_idx, n, c, h, w)
-    return d_pool, d_idx, out_h, out_w
-
-
-def update_conv(d_weight, d_grad, lr, size, name, weight_decay, clip_value, log_grad=False):
-    h_grad = g2h(d_grad, size).reshape(-1)
-    h_weight = g2h(d_weight, size).reshape(-1)
-    h_grad = h_grad + weight_decay * h_weight
-    if log_grad:
-        print(f"    {name} grad_abs_mean={np.mean(np.abs(h_grad)):.6e} grad_abs_max={np.max(np.abs(h_grad)):.6e}")
-    h_grad_clip = np.clip(h_grad, -clip_value, clip_value).astype(np.float32)
-    lib.gpu_memcpy_h2d(d_grad, h_grad_clip.ctypes.data, size * 4)
-    lib.apply_sgd_update(d_weight, d_grad, c_float(lr), size)
-
-
-def save_checkpoint(path, epoch, val_acc, lr_conv1, lr_conv, lr_fc):
-    np.savez(
-        path,
-        epoch=np.int32(epoch),
-        val_acc=np.float32(val_acc),
-        lr_conv1=np.float32(lr_conv1),
-        lr_conv=np.float32(lr_conv),
-        lr_fc=np.float32(lr_fc),
-        w_conv1=g2h(d_w_conv1, C1_OUT * C1_IN * KH * KW),
-        w_conv2=g2h(d_w_conv2, C2_OUT * C2_IN * KH * KW),
-        w_conv3=g2h(d_w_conv3, C3_OUT * C3_IN * KH * KW),
-        w_conv4=g2h(d_w_conv4, C4_OUT * C4_IN * KH * KW),
-        fc_w=g2h(d_fc_w, 10 * FC_IN),
-        fc_b=g2h(d_fc_b, 10),
-    )
-
-
-def reload_weights_from_checkpoint(path):
-    global d_w_conv1, d_w_conv2, d_w_conv3, d_w_conv4, d_fc_w, d_fc_b
-    global fc_w, fc_b
-
-    ckpt = np.load(path)
-    for ptr in [d_w_conv1, d_w_conv2, d_w_conv3, d_w_conv4, d_fc_w, d_fc_b]:
-        lib.gpu_free(ptr)
-
-    fc_w = ckpt["fc_w"].astype(np.float32)
-    fc_b = ckpt["fc_b"].astype(np.float32)
-    d_w_conv1 = upload(ckpt["w_conv1"].astype(np.float32))
-    d_w_conv2 = upload(ckpt["w_conv2"].astype(np.float32))
-    d_w_conv3 = upload(ckpt["w_conv3"].astype(np.float32))
-    d_w_conv4 = upload(ckpt["w_conv4"].astype(np.float32))
-    d_fc_w = upload(fc_w)
-    d_fc_b = upload(fc_b)
-    return ckpt
-
-
-def load_cifar10():
-    data_root = os.path.join(ROOT, "data", "cifar-10-batches-py")
-    print("Loading 5 training batches...")
-    x_parts = []
-    y_parts = []
-    for i in range(1, 6):
-        with open(os.path.join(data_root, f"data_batch_{i}"), "rb") as f:
-            batch = pickle.load(f, encoding="bytes")
-        x_parts.append(batch[b"data"].astype(np.float32) / 255.0)
-        y_parts.append(np.array(batch[b"labels"]))
-    x_train_all = np.concatenate(x_parts, axis=0).reshape(-1, 3, 32, 32)
-    y_train_all = np.concatenate(y_parts, axis=0)
-    print(f"Total training samples: {x_train_all.shape[0]}")
-
-    with open(os.path.join(data_root, "test_batch"), "rb") as f:
-        batch = pickle.load(f, encoding="bytes")
-    x_test = (batch[b"data"].astype(np.float32) / 255.0).reshape(-1, 3, 32, 32)
-    y_test = np.array(batch[b"labels"])
-    print(f"Test samples: {x_test.shape[0]}")
-
-    print("Loading data_batch_1 only...")
-    with open(os.path.join(data_root, "data_batch_1"), "rb") as f:
-        batch = pickle.load(f, encoding="bytes")
-    x_train_all = (batch[b"data"].astype(np.float32) / 255.0).reshape(-1, 3, 32, 32)
-    y_train_all = np.array(batch[b"labels"])
-    print(f"Training samples: {x_train_all.shape[0]}")
-
-    n_train = 8000
-    n_val = 2000
-    indices = np.random.permutation(x_train_all.shape[0])
-    train_idx = indices[:n_train]
-    val_idx = indices[n_train:n_train + n_val]
-
-    return (
-        x_train_all[train_idx],
-        y_train_all[train_idx],
-        x_train_all[val_idx],
-        y_train_all[val_idx],
-        x_test,
-        y_test,
-    )
-
-
-x_train, y_train, x_val, y_val, x_test_final, y_test_final = load_cifar10()
+data_root = os.path.join(ROOT, "data", "cifar-10-batches-py")
+x_train, y_train, x_val, y_val, x_test_final, y_test_final = load_cifar10(
+    data_root,
+    n_train=N_TRAIN,
+    n_val=N_VAL,
+    seed=DATASET_SEED,
+    train_batch_ids=TRAIN_BATCH_IDS,
+)
 x_train = normalize_cifar(x_train)
 x_val = normalize_cifar(x_val)
 x_test_final = normalize_cifar(x_test_final)
 print(f"Train: {x_train.shape[0]}, Val: {x_val.shape[0]}, Test(official): {x_test_final.shape[0]}")
 
-np.random.seed(42)
-
-def he_init(size, fan_in):
-    return np.random.randn(size).astype(np.float32) * np.sqrt(2.0 / fan_in)
-
-
-w_conv1 = he_init(C1_OUT * C1_IN * KH * KW, C1_IN * KH * KW)
-w_conv2 = he_init(C2_OUT * C2_IN * KH * KW, C2_IN * KH * KW)
-w_conv3 = he_init(C3_OUT * C3_IN * KH * KW, C3_IN * KH * KW)
-w_conv4 = he_init(C4_OUT * C4_IN * KH * KW, C4_IN * KH * KW)
-fc_w = he_init(10 * FC_IN, FC_IN)
-fc_b = np.zeros(10, dtype=np.float32)
-
-d_w_conv1 = upload(w_conv1)
-d_w_conv2 = upload(w_conv2)
-d_w_conv3 = upload(w_conv3)
-d_w_conv4 = upload(w_conv4)
-d_fc_w = upload(fc_w)
-d_fc_b = upload(fc_b)
+w_conv1, w_conv2, w_conv3, w_conv4, fc_w, fc_b = init_weights(INIT_SEED)
+d_w_conv1, d_w_conv2, d_w_conv3, d_w_conv4, d_fc_w, d_fc_b = upload_weights(
+    w_conv1, w_conv2, w_conv3, w_conv4, fc_w, fc_b
+)
 
 print(
     "Arch: Conv1(3->32)->Conv2(32->32)->Pool1"
@@ -262,58 +119,6 @@ print(
     f"weight_decay={WEIGHT_DECAY}, BATCH={BATCH}, EPOCHS={EPOCHS}"
 )
 print()
-
-
-def forward_batch(x):
-    n = x.shape[0]
-    d_x = upload(x)
-
-    d_col1, d_conv1_raw, _, _ = conv_forward(d_x, d_w_conv1, n, C1_IN, H, W, C1_OUT)
-    d_conv1_nchw = cnhw_to_nchw_alloc(d_conv1_raw, n, C1_OUT, H1, W1)
-
-    d_col2, d_conv2_raw, _, _ = conv_forward(d_conv1_nchw, d_w_conv2, n, C2_IN, H1, W1, C2_OUT)
-    d_pool1, d_max_idx1, _, _ = maxpool_forward(d_conv2_raw, n, C2_OUT, H2, W2)
-    d_pool1_nchw = cnhw_to_nchw_alloc(d_pool1, n, C2_OUT, P1H, P1W)
-
-    d_col3, d_conv3_raw, _, _ = conv_forward(d_pool1_nchw, d_w_conv3, n, C3_IN, P1H, P1W, C3_OUT)
-    d_conv3_nchw = cnhw_to_nchw_alloc(d_conv3_raw, n, C3_OUT, H3, W3)
-
-    d_col4, d_conv4_raw, _, _ = conv_forward(d_conv3_nchw, d_w_conv4, n, C4_IN, H3, W3, C4_OUT)
-    d_pool2, d_max_idx2, _, _ = maxpool_forward(d_conv4_raw, n, C4_OUT, H4, W4)
-    d_pool2_nchw = cnhw_to_nchw_alloc(d_pool2, n, C4_OUT, P2H, P2W)
-
-    h_pool2 = np.zeros((n, FC_IN), dtype=np.float32)
-    lib.gpu_memcpy_d2h(h_pool2.ctypes.data, d_pool2_nchw, n * FC_IN * 4)
-
-    d_fc_in = upload(h_pool2)
-    d_fc_out = lib.gpu_malloc(n * 10 * 4)
-    lib.dense_forward(d_fc_in, d_fc_w, d_fc_b, d_fc_out, n, FC_IN, 10)
-    h_out = np.zeros((n, 10), dtype=np.float32)
-    lib.gpu_memcpy_d2h(h_out.ctypes.data, d_fc_out, n * 10 * 4)
-
-    for ptr in [
-        d_x, d_col1, d_conv1_raw, d_conv1_nchw,
-        d_col2, d_conv2_raw, d_pool1, d_max_idx1, d_pool1_nchw,
-        d_col3, d_conv3_raw, d_conv3_nchw,
-        d_col4, d_conv4_raw, d_pool2, d_max_idx2, d_pool2_nchw,
-        d_fc_in, d_fc_out,
-    ]:
-        lib.gpu_free(ptr)
-
-    return h_out
-
-
-def evaluate(x, y, batch_size=BATCH, max_batches=50):
-    correct = 0
-    total = 0
-    nbatches = min(x.shape[0] // batch_size, max_batches)
-    for i in range(nbatches):
-        idx_s = i * batch_size
-        idx_e = idx_s + batch_size
-        h_out = forward_batch(x[idx_s:idx_e])
-        correct += np.sum(np.argmax(h_out, axis=1) == y[idx_s:idx_e])
-        total += batch_size
-    return correct / total * 100
 
 
 NBATCHES = x_train.shape[0] // BATCH
@@ -397,7 +202,7 @@ for epoch in range(EPOCHS):
 
         # Conv4 backward.
         grad_pool2_cnhw = np.transpose(
-            np.clip(grad_pool2, -1.0, 1.0).astype(np.float32).reshape(BATCH, C4_OUT, P2H, P2W),
+            np.clip(grad_pool2, -GRAD_POOL_CLIP, GRAD_POOL_CLIP).astype(np.float32).reshape(BATCH, C4_OUT, P2H, P2W),
             (1, 0, 2, 3),
         ).copy()
         d_pool2_grad = upload(grad_pool2_cnhw)
@@ -477,7 +282,7 @@ for epoch in range(EPOCHS):
             print(f"  Batch {batch_idx+1}/{NBATCHES}: loss={loss:.4f}, acc={correct/(batch_idx+1)/BATCH*100:.1f}%")
 
     train_acc = correct / NBATCHES / BATCH * 100
-    val_acc = evaluate(x_val, y_val)
+    val_acc = evaluate(x_val, y_val, current_device_weights())
     epoch_loss = total_loss / NBATCHES
     elapsed = time.time() - t0
     improved = val_acc > (best_val_acc + MIN_DELTA)
@@ -487,7 +292,15 @@ for epoch in range(EPOCHS):
         best_epoch = epoch + 1
         epochs_no_improve = 0
         plateau_count = 0
-        save_checkpoint(BEST_MODEL_PATH, epoch + 1, val_acc, current_lr_conv1, current_lr_conv, current_lr_fc)
+        save_checkpoint(
+            BEST_MODEL_PATH,
+            epoch + 1,
+            val_acc,
+            current_lr_conv1,
+            current_lr_conv,
+            current_lr_fc,
+            current_device_weights(),
+        )
         save_msg = " [saved best]"
     else:
         epochs_no_improve += 1
@@ -521,11 +334,14 @@ for epoch in range(EPOCHS):
 
 print("\n=== FINAL EVALUATION ON OFFICIAL TEST SET ===")
 if os.path.exists(BEST_MODEL_PATH):
-    best_ckpt = reload_weights_from_checkpoint(BEST_MODEL_PATH)
+    best_ckpt, fc_w, fc_b, new_device_weights = reload_weights_from_checkpoint(
+        BEST_MODEL_PATH,
+        current_device_weights(),
+    )
+    d_w_conv1, d_w_conv2, d_w_conv3, d_w_conv4, d_fc_w, d_fc_b = new_device_weights
     print(f"Reloaded best checkpoint from epoch {int(best_ckpt['epoch'])} with Val={float(best_ckpt['val_acc']):.2f}%")
-test_acc = evaluate(x_test_final, y_test_final)
+test_acc = evaluate(x_test_final, y_test_final, current_device_weights())
 print(f"Test Accuracy: {test_acc:.2f}%")
 
-for ptr in [d_w_conv1, d_w_conv2, d_w_conv3, d_w_conv4, d_fc_w, d_fc_b]:
-    lib.gpu_free(ptr)
+free_weights(current_device_weights())
 print("\nDone!")

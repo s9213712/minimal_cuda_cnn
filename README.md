@@ -1,57 +1,82 @@
 # Minimal CUDA CNN
 
-Minimal CUDA CNN is an experimental CUDA/C++ and Python project for building and debugging neural-network layers without using a deep-learning framework.
+Minimal CUDA CNN is an experimental CUDA/C++ and Python project for training and debugging a small CIFAR-10 CNN without using a deep-learning framework for the handwritten implementation path.
 
-The project contains handwritten CUDA kernels, a shared library build, Python `ctypes` callers, CIFAR-10 data-loading experiments, and many focused debugging scripts for forward and backward passes.
+The repository contains:
 
-## Scope
+- CUDA/C++ kernels built into `cpp/libminimal_cuda_cnn.so`
+- Python `ctypes` bindings for the shared object
+- a handwritten CUDA CIFAR-10 training script
+- a matched PyTorch baseline for comparison
+- documentation for compiling and calling the shared object
 
-Implemented or partially explored components include:
+`bug.txt`, CIFAR-10 batch files, compiled `.so` files, `__pycache__`, and training checkpoints are local-only and ignored by Git.
 
-- GPU memory helpers
-- dense layers
-- im2col and GEMM-style convolution paths
-- convolution backward passes
-- ReLU and leaky ReLU
-- max pooling forward and backward variants
-- layout conversion
-- reorganize layers
-- layer normalization and batch normalization experiments
-- softmax/loss helpers
-- SGD optimizer helpers
-- AlexNet/ResNet-oriented experiments
+## Current CIFAR-10 Experiment
 
-This is a research and debugging workspace, not a polished framework API.
+Both the handwritten CUDA trainer and the PyTorch baseline use the same comparison conditions:
 
-## Project Layout
+- Dataset: CIFAR-10 Python batches under `data/cifar-10-batches-py`
+- Train source: `data_batch_1`
+- Split: `8000` train / `2000` validation
+- Test: official `test_batch`
+- Dataset split seed: `42`
+- Initial weight seed: `42`
+- Input normalization: CIFAR-10 channel mean/std
+- Batch size: `64`
+- Max epochs: `50`
+- Early stopping patience: `8`
+- Architecture: valid 3x3 conv stack, no padding
+- Activation: LeakyReLU with alpha `0.1`
+- Optimizer behavior: manual SGD-style updates, weight decay, gradient clipping, and LR plateau reduction
+
+Architecture:
 
 ```text
-cpp/
-  Makefile                 build shared CUDA library
-  include/                 C++ headers
-  src/                     CUDA/C++ kernels and layer implementations
-python/
-  train_*.py               training experiments
-  test_*.py                focused kernel and pipeline tests
-  debug_*.py               debugging scripts
-data/
-  cifar-10-batches-py/     local CIFAR-10 files
+Conv(3->32, 3x3 valid) -> LeakyReLU
+Conv(32->32, 3x3 valid) -> LeakyReLU
+MaxPool(2x2)
+Conv(32->64, 3x3 valid) -> LeakyReLU
+Conv(64->64, 3x3 valid) -> LeakyReLU
+MaxPool(2x2)
+FC(1600->10)
 ```
 
-Large CIFAR-10 batch files and compiled `.so` files are intentionally ignored by Git.
+Shape flow:
+
+```text
+32x32 -> 30x30 -> 28x28 -> 14x14 -> 12x12 -> 10x10 -> 5x5
+```
+
+## Python Layout
+
+```text
+python/
+  train_split.py                 handwritten CUDA CIFAR-10 trainer
+  train_split_torch_baseline.py  matched PyTorch baseline
+  train_config.py                shared training/model constants
+  cifar10_data.py                CIFAR-10 loading, split, normalization
+  model_init.py                  shared host-side initial weights
+  cuda_backend.py                ctypes bindings and GPU helper functions
+  model_forward.py               CUDA inference/evaluation helper
+  model_weights.py               CUDA weight upload/checkpoint/cleanup helper
+```
+
+The split keeps `train_split.py` focused on the training loop and backward pass. Shared configuration and initialization are reused by both CUDA and PyTorch scripts so the two runs can be compared under the same conditions.
 
 ## Requirements
 
-- NVIDIA GPU
+- NVIDIA GPU for the handwritten CUDA trainer
 - CUDA toolkit
 - Python 3
 - NumPy
+- PyTorch for `python/train_split_torch_baseline.py`
 
-Some comparison/debug scripts may import PyTorch, but the CUDA kernels and core project code are handwritten. Scripts named with `pytorch` are reference checks, not the implementation path.
+The CUDA implementation path does not depend on PyTorch. PyTorch is only used as a baseline/reference trainer.
 
 ## Build
 
-The Makefile currently points at CUDA 13.2 and targets `sm_86`:
+Build the CUDA shared library:
 
 ```bash
 cd /home/s92137/NN/minimal_cuda_cnn
@@ -73,51 +98,105 @@ CFLAGS = -O3 -Xcompiler -fPIC -arch=sm_86
 
 ## Data
 
-The local CIFAR-10 directory is:
+Place the CIFAR-10 Python batch files here:
 
 ```text
-data/cifar-10-batches-py
+data/cifar-10-batches-py/
+  data_batch_1
+  data_batch_2
+  data_batch_3
+  data_batch_4
+  data_batch_5
+  test_batch
 ```
 
-The repository tracks only small metadata files. Download or copy the CIFAR-10 Python batch files locally before running training scripts that require them:
+The current experiment only trains from `data_batch_1`, controlled by `TRAIN_BATCH_IDS = (1,)` in `python/train_config.py`.
+
+To compare on all five CIFAR-10 training batches, update:
+
+```python
+N_TRAIN = 40000
+N_VAL = 10000
+TRAIN_BATCH_IDS = (1, 2, 3, 4, 5)
+```
+
+## Run CUDA Trainer
+
+```bash
+cd /home/s92137/NN/minimal_cuda_cnn
+python3 python/train_split.py
+```
+
+The CUDA trainer saves its best local checkpoint to:
 
 ```text
-data_batch_1
-data_batch_2
-data_batch_3
-data_batch_4
-data_batch_5
-test_batch
+python/best_model_split.npz
 ```
 
-## Usage
+That checkpoint is ignored by Git.
 
-Build the CUDA shared library first:
+## Run PyTorch Baseline
 
 ```bash
-make -C cpp
+cd /home/s92137/NN/minimal_cuda_cnn
+python3 python/train_split_torch_baseline.py
 ```
 
-Run a small shared-library load test:
+The PyTorch baseline saves its best local checkpoint to:
 
-```bash
-python3 python/test_so.py
+```text
+python/best_model_split_torch.pt
 ```
 
-Run one of the training experiments:
+That checkpoint is ignored by Git.
 
-```bash
-python3 python/train_real.py
+Baseline result from the current run on 2026-04-18:
+
+```text
+Best validation accuracy: 57.31% at epoch 40
+Official test accuracy:   57.34%
+Early stopping:           epoch 48
+Device used:              CPU
 ```
 
-Run focused kernel checks as needed:
+PyTorch reported `torch.cuda.is_available() == False` in this environment, so the baseline run above used CPU. The script automatically uses CUDA if PyTorch can see a CUDA device.
+
+## Shared Object Documentation
+
+The shared object usage guide is split across:
+
+```text
+docs/01_project_files.md
+docs/02_build_shared_library.md
+docs/03_c_api_reference.md
+docs/04_python_ctypes_mnist.md
+docs/05_cpp_linking.md
+docs/06_layout_and_debug.md
+docs/train_mnist_so.py
+```
+
+These files describe the `.cu` and `.h` roles, how to compile the `.so`, and how to call it from Python or C++.
+
+## Useful Checks
+
+Syntax check:
 
 ```bash
-python3 python/test_gemm.py
-python3 python/test_softmax.py
-python3 python/test_pool_2x2.py
+python3 -m py_compile python/*.py docs/train_mnist_so.py
+```
+
+Quick PyTorch initialization equality check:
+
+```bash
+python3 -c "import sys, torch; sys.path.insert(0, 'python'); from model_init import init_weights; from train_split_torch_baseline import TorchCifarCnn, load_initial_weights; from train_config import INIT_SEED; m=TorchCifarCnn(); load_initial_weights(m, torch.device('cpu')); w=init_weights(INIT_SEED); print((m.conv1.weight.detach().flatten()-torch.from_numpy(w[0])).abs().max().item())"
+```
+
+Expected output:
+
+```text
+0.0
 ```
 
 ## Notes
 
-This directory contains many historical debugging scripts. When changing CUDA kernels, prefer small focused tests first, then run the larger training scripts after the kernel-level behavior is stable.
+This is still a research/debugging workspace. When changing CUDA kernels, run focused kernel-level checks first, then run `python/train_split.py` and compare against `python/train_split_torch_baseline.py`.
