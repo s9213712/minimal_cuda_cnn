@@ -12,7 +12,7 @@ Minimal CUDA CNN 是一個實驗性的 CUDA/C++ 與 Python 專案，用來訓練
 - 條件對齊的 PyTorch baseline
 - `.so` 編譯、C API、Python/C++ 呼叫方式的教學文件
 
-`bug.txt`、CIFAR-10 batch 檔、編譯後的 `.so`、`__pycache__` 與訓練 checkpoint 都是本機檔案，已透過 Git ignore 排除。
+CIFAR-10 batch 檔、編譯後的 `.so`、`__pycache__` 與訓練 checkpoint 都是本機檔案，已透過 Git ignore 排除。
 
 ## 目前 CIFAR-10 實驗
 

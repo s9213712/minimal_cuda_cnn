@@ -12,7 +12,7 @@ The repository contains:
 - a matched PyTorch baseline for comparison
 - documentation for compiling and calling the shared object
 
-`bug.txt`, CIFAR-10 batch files, compiled `.so` files, `__pycache__`, and training checkpoints are local-only and ignored by Git.
+CIFAR-10 batch files, compiled `.so` files, `__pycache__`, and training checkpoints are local-only and ignored by Git.
 
 ## Current CIFAR-10 Experiment
 
