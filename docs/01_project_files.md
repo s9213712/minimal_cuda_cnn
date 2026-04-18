@@ -78,8 +78,9 @@ minimal_cuda_cnn/
 | `train_split.py` | 手寫 CUDA CIFAR-10 trainer。主要保留訓練 loop、backward pass、scheduler、early stopping，並用 `BatchWorkspace` 重用固定 shape 的 batch GPU buffer。 |
 | `train_split_torch_baseline.py` | PyTorch baseline。使用同一個資料切分、模型架構、初始權重、Momentum SGD 條件，方便和 CUDA trainer 比較。 |
 | `train_config.py` | 共享訓練參數與模型 shape。包含 full CIFAR `45000/5000` split、`BATCH`、`EPOCHS`、`LR_*`、`MOMENTUM`、`WEIGHT_DECAY`、gradient clipping、conv spatial gradient normalization 與 conv shape。 |
-| `cifar10_data.py` | CIFAR-10 batch 讀取、train/val/test split、CIFAR mean/std normalization。 |
+| `cifar10_data.py` | CIFAR-10 batch 下載/準備、讀取、train/val/test split、CIFAR mean/std normalization。 |
+| `prepare_cifar10.py` | 獨立資料準備腳本，下載並解壓 CIFAR-10 Python archive 到 `data/cifar-10-batches-py/`。 |
 | `cuda_backend.py` | Python `ctypes` binding、`.so` 載入、GPU memory helper、conv/maxpool helper、Momentum conv update helper。 |
 | `model_init.py` | CPU 端共享 initial weights。CUDA trainer 和 PyTorch baseline 都從這裡取得同一組初始權重。 |
 | `model_weights.py` | CUDA 權重上傳、velocity buffer 初始化、checkpoint save/load、GPU pointer 釋放。 |
-| `model_forward.py` | CUDA inference forward pass 與 validation/test evaluation。 |
+| `model_forward.py` | CUDA inference forward pass 與 validation/test evaluation。Evaluation 的 FC 與 argmax/correct count 留在 GPU，Python 只下載 scalar correct count。 |

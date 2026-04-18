@@ -53,6 +53,7 @@ from train_config import (
     P2H,
     P2W,
     TRAIN_BATCH_IDS,
+    TRAIN_SEED,
     W1,
     W2,
     W3,
@@ -143,18 +144,20 @@ def evaluate(model, x, y, device, batch_size=BATCH, max_batches=EVAL_MAX_BATCHES
     model.eval()
     correct = 0
     total = 0
-    nbatches = x.shape[0] // batch_size
+    nbatches = (x.shape[0] + batch_size - 1) // batch_size
     if max_batches is not None:
         nbatches = min(nbatches, max_batches)
     with torch.no_grad():
         for i in range(nbatches):
             idx_s = i * batch_size
-            idx_e = idx_s + batch_size
+            idx_e = min(idx_s + batch_size, x.shape[0])
+            if idx_s >= idx_e:
+                break
             xb = torch.from_numpy(x[idx_s:idx_e]).to(device)
             logits = model(xb)
             pred = torch.argmax(logits, dim=1).cpu().numpy()
             correct += np.sum(pred == y[idx_s:idx_e])
-            total += batch_size
+            total += idx_e - idx_s
     model.train()
     return correct / total * 100
 
@@ -182,7 +185,7 @@ def main():
     velocity = init_velocity_buffers(model)
     criterion = nn.CrossEntropyLoss()
 
-    nbatches = x_train.shape[0] // BATCH
+    nbatches = (x_train.shape[0] + BATCH - 1) // BATCH
     best_val_acc = -1.0
     best_epoch = -1
     epochs_no_improve = 0
@@ -205,22 +208,26 @@ def main():
         f"LR_conv1={LR_CONV1}, LR_conv={LR_CONV}, LR_fc={LR_FC}, "
         f"momentum={MOMENTUM}, weight_decay={WEIGHT_DECAY}, BATCH={BATCH}, EPOCHS={EPOCHS}"
     )
-    print(f"DATASET_SEED={DATASET_SEED}, INIT_SEED={INIT_SEED}")
+    print(f"DATASET_SEED={DATASET_SEED}, INIT_SEED={INIT_SEED}, TRAIN_SEED={TRAIN_SEED}")
     print()
+    train_rng = np.random.default_rng(TRAIN_SEED)
 
     for epoch in range(EPOCHS):
         t0 = time.time()
         total_loss = 0.0
         correct = 0
-        indices = np.random.permutation(x_train.shape[0])
+        total_seen = 0
+        indices = train_rng.permutation(x_train.shape[0])
 
         for batch_idx in range(nbatches):
             idx_s = batch_idx * BATCH
-            idx_e = idx_s + BATCH
+            idx_e = min(idx_s + BATCH, x_train.shape[0])
+            if idx_s >= idx_e:
+                continue
             x = x_train[indices[idx_s:idx_e]]
             y = y_train[indices[idx_s:idx_e]]
 
-            if np.random.rand() > 0.5:
+            if train_rng.random() > 0.5:
                 x = x[:, :, :, ::-1].copy()
 
             xb = torch.from_numpy(x).to(device)
@@ -231,17 +238,19 @@ def main():
             loss.backward()
             apply_momentum_update(model, velocity, current_lr_conv1, current_lr_conv, current_lr_fc)
 
-            total_loss += float(loss.detach().cpu().item())
+            n = idx_e - idx_s
+            total_loss += float(loss.detach().cpu().item()) * n
             pred = torch.argmax(logits.detach(), dim=1)
             correct += int((pred == yb).sum().detach().cpu().item())
+            total_seen += n
 
             if (batch_idx + 1) % 100 == 0:
-                acc = correct / (batch_idx + 1) / BATCH * 100
+                acc = correct / total_seen * 100
                 print(f"  Batch {batch_idx+1}/{nbatches}: loss={float(loss.detach().cpu().item()):.4f}, acc={acc:.1f}%")
 
-        train_acc = correct / nbatches / BATCH * 100
+        train_acc = correct / total_seen * 100
         val_acc = evaluate(model, x_val, y_val, device)
-        epoch_loss = total_loss / nbatches
+        epoch_loss = total_loss / total_seen
         elapsed = time.time() - t0
         improved = val_acc > (best_val_acc + MIN_DELTA)
 

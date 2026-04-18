@@ -34,6 +34,14 @@ void maxpool_forward_store(float* output, float* input, int* max_idx,
                            int N, int C, int H, int W);
 
 void softmax_forward(float* input, float* output, int N, int features);
+
+void softmax_xent_grad_loss_acc(float* logits, int* labels,
+                                float* probs, float* grad_logits,
+                                float* loss_sum, int* correct_count,
+                                int N, int features);
+
+void count_correct(float* logits, int* labels, int* correct_count,
+                   int N, int features);
 ```
 
 典型 convolution forward：
@@ -150,6 +158,27 @@ dense_forward input: row-major (N, features)
 ```c
 float softmax_cross_entropy(float* input, float* labels, float* probs, float* loss,
                             int N, int features);
+
+void softmax_xent_grad_loss_acc(float* logits, int* labels,
+                                float* probs, float* grad_logits,
+                                float* loss_sum, int* correct_count,
+                                int N, int features);
+
+void count_correct(float* logits, int* labels, int* correct_count,
+                   int N, int features);
 ```
 
 `labels` 是 one-hot label。此函式會計算 softmax 與 loss，不會修改 label buffer。若 `loss` 非 null，會把 scalar loss 寫到 device pointer。
+
+`softmax_xent_grad_loss_acc` 是目前 CIFAR trainer 使用的 fused loss helper：
+
+```text
+probs = softmax(logits)
+grad_logits = (probs - one_hot(labels)) / N
+loss_sum = sum(-log(probs[label]))
+correct_count = number of argmax(logits) == label
+```
+
+`labels` 是 `int32` class id，不是 one-hot。呼叫前需將 `loss_sum` 與 `correct_count` 清為 0。Python 端只需下載這兩個 scalar。
+
+`count_correct` 用於 evaluation，可直接在 GPU 端從 logits 計算 batch correct count。

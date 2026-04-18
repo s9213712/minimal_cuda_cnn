@@ -40,6 +40,79 @@ __global__ void cross_entropy_backward_kernel(float* grad_out, float* probs, int
     grad_out[idx] = (probs[idx] - grad_out[idx]);  // label[j=target] = 1, else 0
 }
 
+__global__ void softmax_xent_grad_loss_acc_kernel(
+    const float* logits,
+    const int* labels,
+    float* probs,
+    float* grad_logits,
+    float* loss_sum,
+    int* correct_count,
+    int N,
+    int features
+) {
+    int n = blockIdx.x;
+    if (n >= N || threadIdx.x != 0) return;
+
+    const float* row = logits + n * features;
+    float* prob_row = probs + n * features;
+    float* grad_row = grad_logits + n * features;
+    int label = labels[n];
+
+    float max_val = -1e38f;
+    int pred = 0;
+    for (int j = 0; j < features; ++j) {
+        float v = row[j];
+        if (v > max_val) {
+            max_val = v;
+            pred = j;
+        }
+    }
+
+    float sum = 0.0f;
+    for (int j = 0; j < features; ++j) {
+        float p = expf(row[j] - max_val);
+        prob_row[j] = p;
+        sum += p;
+    }
+
+    for (int j = 0; j < features; ++j) {
+        float p = prob_row[j] / sum;
+        prob_row[j] = p;
+        float target = (j == label) ? 1.0f : 0.0f;
+        grad_row[j] = (p - target) / static_cast<float>(N);
+    }
+
+    atomicAdd(loss_sum, -logf(prob_row[label] + 1e-10f));
+    if (pred == label) {
+        atomicAdd(correct_count, 1);
+    }
+}
+
+__global__ void count_correct_kernel(
+    const float* logits,
+    const int* labels,
+    int* correct_count,
+    int N,
+    int features
+) {
+    int n = blockIdx.x;
+    if (n >= N || threadIdx.x != 0) return;
+
+    const float* row = logits + n * features;
+    int pred = 0;
+    float best = row[0];
+    for (int j = 1; j < features; ++j) {
+        float v = row[j];
+        if (v > best) {
+            best = v;
+            pred = j;
+        }
+    }
+    if (pred == labels[n]) {
+        atomicAdd(correct_count, 1);
+    }
+}
+
 extern "C" {
     void softmax_forward(float* d_input, float* d_output, int N, int features) {
         int tpb = 256;
@@ -80,6 +153,27 @@ extern "C" {
         dim3 block(256);
         dim3 grid((N * features + 255) / 256);
         cross_entropy_backward_kernel<<<grid, block>>>(d_grad_out, d_probs, N, features);
+        CUDA_KERNEL_CHECK();
+    }
+
+    void softmax_xent_grad_loss_acc(
+        float* d_logits,
+        int* d_labels,
+        float* d_probs,
+        float* d_grad_logits,
+        float* d_loss_sum,
+        int* d_correct_count,
+        int N,
+        int features
+    ) {
+        softmax_xent_grad_loss_acc_kernel<<<N, 1>>>(
+            d_logits, d_labels, d_probs, d_grad_logits, d_loss_sum, d_correct_count, N, features
+        );
+        CUDA_KERNEL_CHECK();
+    }
+
+    void count_correct(float* d_logits, int* d_labels, int* d_correct_count, int N, int features) {
+        count_correct_kernel<<<N, 1>>>(d_logits, d_labels, d_correct_count, N, features);
         CUDA_KERNEL_CHECK();
     }
 }

@@ -84,6 +84,7 @@ CUDA error at src/memory.cu:8: cudaMalloc(&ptr, size) failed: ...
 
 ```bash
 make -C cpp
+make -C cpp check
 python3 -u /tmp/so_function_check.py
 cuda-memcheck python3 -u /tmp/so_function_check.py
 ```
@@ -104,6 +105,12 @@ nm -D cpp/libminimal_cuda_cnn.so | grep conv_backward_precol
 
 ```bash
 timeout 70s python3 -u python/train_split.py
+```
+
+若本機沒有 CIFAR-10 batch：
+
+```bash
+python3 python/prepare_cifar10.py
 ```
 
 完整 CIFAR-10 訓練：
@@ -141,3 +148,4 @@ cuda-memcheck python3 -u your_script.py
 3. 再加 Pool。
 4. 每一步都檢查 gradient scale。`conv_backward`/`conv_backward_precol` 的 weight gradient 會累加傳入的 `grad_out`，目前 CIFAR trainer 會先在 logits gradient 做 batch mean，再交給後續 backward。
 5. 使用 Momentum SGD 時，velocity buffer 不能每個 batch 重設；它必須從訓練開始保留到訓練結束。
+6. 若改到 loss，優先檢查 `softmax_xent_grad_loss_acc` 是否輸出合理的 loss scalar、correct count 與 `(probs - one_hot) / N`。

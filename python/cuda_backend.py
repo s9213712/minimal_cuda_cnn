@@ -11,7 +11,32 @@ from train_config import KH, KW, LEAKY_ALPHA
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SO_PATH = os.path.join(ROOT, "cpp", "libminimal_cuda_cnn.so")
-lib = ctypes.CDLL(SO_PATH)
+
+
+def load_library(path=SO_PATH):
+    if not os.path.exists(path):
+        raise RuntimeError(
+            "CUDA shared library not found:\n"
+            f"  {path}\n\n"
+            "Build it from the repository root first:\n"
+            "  make -C cpp\n\n"
+            "Optional backends:\n"
+            "  make -C cpp USE_CUBLAS=1  # fast default\n"
+            "  make -C cpp USE_CUBLAS=0  # handwritten CUDA fallback\n"
+        )
+    try:
+        return ctypes.CDLL(path)
+    except OSError as exc:
+        raise RuntimeError(
+            "Failed to load CUDA shared library:\n"
+            f"  {path}\n\n"
+            f"Loader error: {exc}\n\n"
+            "Check that CUDA runtime libraries are visible, then rebuild:\n"
+            "  make -C cpp\n"
+        ) from exc
+
+
+lib = load_library()
 
 lib.gpu_malloc.argtypes = [ctypes.c_size_t]
 lib.gpu_malloc.restype = c_void_p
@@ -29,6 +54,11 @@ lib.dense_backward_full.argtypes = [
     c_void_p, c_void_p, c_void_p,
     c_int, c_int, c_int,
 ]
+lib.softmax_xent_grad_loss_acc.argtypes = [
+    c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p,
+    c_int, c_int,
+]
+lib.count_correct.argtypes = [c_void_p, c_void_p, c_void_p, c_int, c_int]
 lib.apply_sgd_update.argtypes = [c_void_p, c_void_p, c_float, c_int]
 lib.apply_momentum_update.argtypes = [c_void_p, c_void_p, c_void_p, c_float, c_float, c_int]
 lib.conv_update_fused.argtypes = [
@@ -63,8 +93,39 @@ def gpu_zeros(size):
     return ptr
 
 
+def gpu_scalar_float():
+    return lib.gpu_malloc(4)
+
+
+def gpu_scalar_int():
+    return lib.gpu_malloc(4)
+
+
+def zero_bytes(ptr, nbytes):
+    lib.gpu_memset(ptr, 0, nbytes)
+
+
+def download_float_scalar(ptr):
+    h = np.zeros(1, dtype=np.float32)
+    lib.gpu_memcpy_d2h(h.ctypes.data, ptr, 4)
+    return float(h[0])
+
+
+def download_int_scalar(ptr):
+    h = np.zeros(1, dtype=np.int32)
+    lib.gpu_memcpy_d2h(h.ctypes.data, ptr, 4)
+    return int(h[0])
+
+
 def upload(arr):
     arr = np.ascontiguousarray(arr.astype(np.float32, copy=False))
+    ptr = lib.gpu_malloc(arr.size * 4)
+    lib.gpu_memcpy_h2d(ptr, arr.ctypes.data, arr.size * 4)
+    return ptr
+
+
+def upload_int(arr):
+    arr = np.ascontiguousarray(arr.astype(np.int32, copy=False))
     ptr = lib.gpu_malloc(arr.size * 4)
     lib.gpu_memcpy_h2d(ptr, arr.ctypes.data, arr.size * 4)
     return ptr

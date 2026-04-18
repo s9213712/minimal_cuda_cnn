@@ -14,7 +14,8 @@ import numpy as np
 
 from cifar10_data import load_cifar10, normalize_cifar
 from cuda_backend import (
-    g2h,
+    download_float_scalar,
+    download_int_scalar,
     lib,
     update_conv,
 )
@@ -67,6 +68,7 @@ from train_config import (
     P2H,
     P2W,
     TRAIN_BATCH_IDS,
+    TRAIN_SEED,
     W,
     W1,
     W2,
@@ -94,6 +96,11 @@ def malloc_floats(size):
 
 def upload_to(ptr, arr):
     arr = np.ascontiguousarray(arr.astype(np.float32, copy=False))
+    lib.gpu_memcpy_h2d(ptr, arr.ctypes.data, arr.size * 4)
+
+
+def upload_int_to(ptr, arr):
+    arr = np.ascontiguousarray(arr.astype(np.int32, copy=False))
     lib.gpu_memcpy_h2d(ptr, arr.ctypes.data, arr.size * 4)
 
 
@@ -141,7 +148,11 @@ class BatchWorkspace:
         self.d_max_idx2 = self.alloc(C4_OUT * BATCH * P2H * P2W)
         self.d_pool2_nchw = self.alloc(BATCH * C4_OUT * P2H * P2W)
         self.d_fc_out = self.alloc(BATCH * 10)
+        self.d_y = self.alloc(BATCH)
+        self.d_probs = self.alloc(BATCH * 10)
         self.d_grad_logits = self.alloc(BATCH * 10)
+        self.d_loss_sum = self.alloc(1)
+        self.d_correct = self.alloc(1)
         self.d_pool2_grad_nchw = self.alloc(BATCH * FC_IN)
         self.d_fc_grad_w = self.alloc(10 * FC_IN)
         self.d_fc_grad_b = self.alloc(10)
@@ -202,10 +213,11 @@ print(
     f"LR_conv1={LR_CONV1}, LR_conv={LR_CONV}, LR_fc={LR_FC}, "
     f"momentum={MOMENTUM}, weight_decay={WEIGHT_DECAY}, BATCH={BATCH}, EPOCHS={EPOCHS}"
 )
+print(f"DATASET_SEED={DATASET_SEED}, INIT_SEED={INIT_SEED}, TRAIN_SEED={TRAIN_SEED}")
 print()
 
 
-NBATCHES = x_train.shape[0] // BATCH
+NBATCHES = (x_train.shape[0] + BATCH - 1) // BATCH
 best_val_acc = -1.0
 best_epoch = -1
 epochs_no_improve = 0
@@ -214,57 +226,65 @@ current_lr_conv1 = LR_CONV1
 current_lr_conv = LR_CONV
 current_lr_fc = LR_FC
 workspace = BatchWorkspace()
+train_rng = np.random.default_rng(TRAIN_SEED)
 
 for epoch in range(EPOCHS):
     t0 = time.time()
     total_loss = 0.0
     correct = 0
-    indices = np.random.permutation(x_train.shape[0])
+    total_seen = 0
+    indices = train_rng.permutation(x_train.shape[0])
 
     for batch_idx in range(NBATCHES):
         log_grad = GRAD_DEBUG and batch_idx < GRAD_DEBUG_BATCHES
         idx_s = batch_idx * BATCH
-        idx_e = idx_s + BATCH
+        idx_e = min(idx_s + BATCH, x_train.shape[0])
+        n = idx_e - idx_s
+        if n <= 0:
+            continue
         x = x_train[indices[idx_s:idx_e]]
         y = y_train[indices[idx_s:idx_e]]
 
-        if np.random.rand() > 0.5:
+        if train_rng.random() > 0.5:
             x = x[:, :, :, ::-1].copy()
 
         # Forward, keeping intermediates needed for backward.
         upload_to(workspace.d_x, x)
+        upload_int_to(workspace.d_y, y)
 
-        conv_forward_into(workspace.d_x, d_w_conv1, workspace.d_col1, workspace.d_conv1_raw, BATCH, C1_IN, H, W, C1_OUT)
-        cnhw_to_nchw_into(workspace.d_conv1_raw, workspace.d_conv1_nchw, BATCH, C1_OUT, H1, W1)
+        conv_forward_into(workspace.d_x, d_w_conv1, workspace.d_col1, workspace.d_conv1_raw, n, C1_IN, H, W, C1_OUT)
+        cnhw_to_nchw_into(workspace.d_conv1_raw, workspace.d_conv1_nchw, n, C1_OUT, H1, W1)
 
-        conv_forward_into(workspace.d_conv1_nchw, d_w_conv2, workspace.d_col2, workspace.d_conv2_raw, BATCH, C2_IN, H1, W1, C2_OUT)
-        maxpool_forward_into(workspace.d_conv2_raw, workspace.d_pool1, workspace.d_max_idx1, BATCH, C2_OUT, H2, W2)
-        cnhw_to_nchw_into(workspace.d_pool1, workspace.d_pool1_nchw, BATCH, C2_OUT, P1H, P1W)
+        conv_forward_into(workspace.d_conv1_nchw, d_w_conv2, workspace.d_col2, workspace.d_conv2_raw, n, C2_IN, H1, W1, C2_OUT)
+        maxpool_forward_into(workspace.d_conv2_raw, workspace.d_pool1, workspace.d_max_idx1, n, C2_OUT, H2, W2)
+        cnhw_to_nchw_into(workspace.d_pool1, workspace.d_pool1_nchw, n, C2_OUT, P1H, P1W)
 
-        conv_forward_into(workspace.d_pool1_nchw, d_w_conv3, workspace.d_col3, workspace.d_conv3_raw, BATCH, C3_IN, P1H, P1W, C3_OUT)
-        cnhw_to_nchw_into(workspace.d_conv3_raw, workspace.d_conv3_nchw, BATCH, C3_OUT, H3, W3)
+        conv_forward_into(workspace.d_pool1_nchw, d_w_conv3, workspace.d_col3, workspace.d_conv3_raw, n, C3_IN, P1H, P1W, C3_OUT)
+        cnhw_to_nchw_into(workspace.d_conv3_raw, workspace.d_conv3_nchw, n, C3_OUT, H3, W3)
 
-        conv_forward_into(workspace.d_conv3_nchw, d_w_conv4, workspace.d_col4, workspace.d_conv4_raw, BATCH, C4_IN, H3, W3, C4_OUT)
-        maxpool_forward_into(workspace.d_conv4_raw, workspace.d_pool2, workspace.d_max_idx2, BATCH, C4_OUT, H4, W4)
-        cnhw_to_nchw_into(workspace.d_pool2, workspace.d_pool2_nchw, BATCH, C4_OUT, P2H, P2W)
+        conv_forward_into(workspace.d_conv3_nchw, d_w_conv4, workspace.d_col4, workspace.d_conv4_raw, n, C4_IN, H3, W3, C4_OUT)
+        maxpool_forward_into(workspace.d_conv4_raw, workspace.d_pool2, workspace.d_max_idx2, n, C4_OUT, H4, W4)
+        cnhw_to_nchw_into(workspace.d_pool2, workspace.d_pool2_nchw, n, C4_OUT, P2H, P2W)
 
-        lib.dense_forward(workspace.d_pool2_nchw, d_fc_w, d_fc_b, workspace.d_fc_out, BATCH, FC_IN, 10)
-        h_out = np.zeros((BATCH, 10), dtype=np.float32)
-        lib.gpu_memcpy_d2h(h_out.ctypes.data, workspace.d_fc_out, BATCH * 10 * 4)
+        lib.dense_forward(workspace.d_pool2_nchw, d_fc_w, d_fc_b, workspace.d_fc_out, n, FC_IN, 10)
+        lib.gpu_memset(workspace.d_loss_sum, 0, 4)
+        lib.gpu_memset(workspace.d_correct, 0, 4)
+        lib.softmax_xent_grad_loss_acc(
+            workspace.d_fc_out,
+            workspace.d_y,
+            workspace.d_probs,
+            workspace.d_grad_logits,
+            workspace.d_loss_sum,
+            workspace.d_correct,
+            n,
+            10,
+        )
+        batch_loss_sum = download_float_scalar(workspace.d_loss_sum)
+        batch_correct = download_int_scalar(workspace.d_correct)
+        total_loss += batch_loss_sum
+        correct += batch_correct
+        total_seen += n
 
-        h_out_shifted = h_out - h_out.max(axis=1, keepdims=True)
-        exp_out = np.exp(h_out_shifted)
-        probs = exp_out / exp_out.sum(axis=1, keepdims=True)
-        loss = -np.mean(np.log(probs[np.arange(BATCH), y] + 1e-10))
-        total_loss += loss
-        correct += np.sum(np.argmax(probs, axis=1) == y)
-
-        labels_onehot = np.zeros((BATCH, 10), dtype=np.float32)
-        labels_onehot[np.arange(BATCH), y] = 1.0
-        # Batch scaling belongs here. Conv updates optionally add per-layer spatial normalization.
-        d_logits = (probs - labels_onehot) / BATCH
-
-        upload_to(workspace.d_grad_logits, d_logits)
         lib.dense_backward_full(
             workspace.d_grad_logits,
             workspace.d_pool2_nchw,
@@ -272,7 +292,7 @@ for epoch in range(EPOCHS):
             workspace.d_pool2_grad_nchw,
             workspace.d_fc_grad_w,
             workspace.d_fc_grad_b,
-            BATCH,
+            n,
             FC_IN,
             10,
         )
@@ -300,16 +320,16 @@ for epoch in range(EPOCHS):
         )
 
         # Conv4 backward.
-        lib.clip_inplace(workspace.d_pool2_grad_nchw, c_float(GRAD_POOL_CLIP), BATCH * FC_IN)
-        nchw_to_cnhw_into(workspace.d_pool2_grad_nchw, workspace.d_pool2_grad, BATCH, C4_OUT, P2H, P2W)
-        zero_floats(workspace.d_conv4_grad_raw, C4_OUT * BATCH * H4 * W4)
-        lib.maxpool_backward_use_idx(workspace.d_pool2_grad, workspace.d_max_idx2, workspace.d_conv4_grad_raw, BATCH, C4_OUT, H4, W4)
-        lib.leaky_relu_backward(workspace.d_conv4_raw, workspace.d_conv4_grad_raw, c_float(LEAKY_ALPHA), C4_OUT * BATCH * H4 * W4)
+        lib.clip_inplace(workspace.d_pool2_grad_nchw, c_float(GRAD_POOL_CLIP), n * FC_IN)
+        nchw_to_cnhw_into(workspace.d_pool2_grad_nchw, workspace.d_pool2_grad, n, C4_OUT, P2H, P2W)
+        zero_floats(workspace.d_conv4_grad_raw, C4_OUT * n * H4 * W4)
+        lib.maxpool_backward_use_idx(workspace.d_pool2_grad, workspace.d_max_idx2, workspace.d_conv4_grad_raw, n, C4_OUT, H4, W4)
+        lib.leaky_relu_backward(workspace.d_conv4_raw, workspace.d_conv4_grad_raw, c_float(LEAKY_ALPHA), C4_OUT * n * H4 * W4)
 
         lib.conv_backward_precol(
             workspace.d_conv4_grad_raw, workspace.d_conv3_nchw, d_w_conv4, workspace.d_w_conv4_grad, workspace.d_conv3_grad,
             workspace.d_col4,
-            BATCH, C4_IN, H3, W3, KH, KW, H4, W4, C4_OUT,
+            n, C4_IN, H3, W3, KH, KW, H4, W4, C4_OUT,
         )
         update_conv(
             d_w_conv4, workspace.d_w_conv4_grad, d_v_conv4, current_lr_conv, MOMENTUM, C4_OUT * C4_IN * KH * KW,
@@ -319,12 +339,12 @@ for epoch in range(EPOCHS):
         )
 
         # Conv3 backward.
-        nchw_to_cnhw_into(workspace.d_conv3_grad, workspace.d_conv3_grad_raw, BATCH, C3_OUT, H3, W3)
-        lib.leaky_relu_backward(workspace.d_conv3_raw, workspace.d_conv3_grad_raw, c_float(LEAKY_ALPHA), C3_OUT * BATCH * H3 * W3)
+        nchw_to_cnhw_into(workspace.d_conv3_grad, workspace.d_conv3_grad_raw, n, C3_OUT, H3, W3)
+        lib.leaky_relu_backward(workspace.d_conv3_raw, workspace.d_conv3_grad_raw, c_float(LEAKY_ALPHA), C3_OUT * n * H3 * W3)
         lib.conv_backward_precol(
             workspace.d_conv3_grad_raw, workspace.d_pool1_nchw, d_w_conv3, workspace.d_w_conv3_grad, workspace.d_pool1_grad,
             workspace.d_col3,
-            BATCH, C3_IN, P1H, P1W, KH, KW, H3, W3, C3_OUT,
+            n, C3_IN, P1H, P1W, KH, KW, H3, W3, C3_OUT,
         )
         update_conv(
             d_w_conv3, workspace.d_w_conv3_grad, d_v_conv3, current_lr_conv, MOMENTUM, C3_OUT * C3_IN * KH * KW,
@@ -334,14 +354,14 @@ for epoch in range(EPOCHS):
         )
 
         # Conv2 backward.
-        nchw_to_cnhw_into(workspace.d_pool1_grad, workspace.d_pool1_grad_cnhw, BATCH, C2_OUT, P1H, P1W)
-        zero_floats(workspace.d_conv2_grad_raw, C2_OUT * BATCH * H2 * W2)
-        lib.maxpool_backward_use_idx(workspace.d_pool1_grad_cnhw, workspace.d_max_idx1, workspace.d_conv2_grad_raw, BATCH, C2_OUT, H2, W2)
-        lib.leaky_relu_backward(workspace.d_conv2_raw, workspace.d_conv2_grad_raw, c_float(LEAKY_ALPHA), C2_OUT * BATCH * H2 * W2)
+        nchw_to_cnhw_into(workspace.d_pool1_grad, workspace.d_pool1_grad_cnhw, n, C2_OUT, P1H, P1W)
+        zero_floats(workspace.d_conv2_grad_raw, C2_OUT * n * H2 * W2)
+        lib.maxpool_backward_use_idx(workspace.d_pool1_grad_cnhw, workspace.d_max_idx1, workspace.d_conv2_grad_raw, n, C2_OUT, H2, W2)
+        lib.leaky_relu_backward(workspace.d_conv2_raw, workspace.d_conv2_grad_raw, c_float(LEAKY_ALPHA), C2_OUT * n * H2 * W2)
         lib.conv_backward_precol(
             workspace.d_conv2_grad_raw, workspace.d_conv1_nchw, d_w_conv2, workspace.d_w_conv2_grad, workspace.d_conv1_grad,
             workspace.d_col2,
-            BATCH, C2_IN, H1, W1, KH, KW, H2, W2, C2_OUT,
+            n, C2_IN, H1, W1, KH, KW, H2, W2, C2_OUT,
         )
         update_conv(
             d_w_conv2, workspace.d_w_conv2_grad, d_v_conv2, current_lr_conv, MOMENTUM, C2_OUT * C2_IN * KH * KW,
@@ -351,12 +371,12 @@ for epoch in range(EPOCHS):
         )
 
         # Conv1 backward.
-        nchw_to_cnhw_into(workspace.d_conv1_grad, workspace.d_conv1_grad_raw, BATCH, C1_OUT, H1, W1)
-        lib.leaky_relu_backward(workspace.d_conv1_raw, workspace.d_conv1_grad_raw, c_float(LEAKY_ALPHA), C1_OUT * BATCH * H1 * W1)
+        nchw_to_cnhw_into(workspace.d_conv1_grad, workspace.d_conv1_grad_raw, n, C1_OUT, H1, W1)
+        lib.leaky_relu_backward(workspace.d_conv1_raw, workspace.d_conv1_grad_raw, c_float(LEAKY_ALPHA), C1_OUT * n * H1 * W1)
         lib.conv_backward_precol(
             workspace.d_conv1_grad_raw, workspace.d_x, d_w_conv1, workspace.d_w_conv1_grad, workspace.d_x_grad,
             workspace.d_col1,
-            BATCH, C1_IN, H, W, KH, KW, H1, W1, C1_OUT,
+            n, C1_IN, H, W, KH, KW, H1, W1, C1_OUT,
         )
         update_conv(
             d_w_conv1, workspace.d_w_conv1_grad, d_v_conv1, current_lr_conv1, MOMENTUM, C1_OUT * C1_IN * KH * KW,
@@ -366,11 +386,11 @@ for epoch in range(EPOCHS):
         )
 
         if (batch_idx + 1) % 100 == 0:
-            print(f"  Batch {batch_idx+1}/{NBATCHES}: loss={loss:.4f}, acc={correct/(batch_idx+1)/BATCH*100:.1f}%")
+            print(f"  Batch {batch_idx+1}/{NBATCHES}: loss={batch_loss_sum/n:.4f}, acc={correct/total_seen*100:.1f}%")
 
-    train_acc = correct / NBATCHES / BATCH * 100
+    train_acc = correct / total_seen * 100
     val_acc = evaluate(x_val, y_val, current_device_weights())
-    epoch_loss = total_loss / NBATCHES
+    epoch_loss = total_loss / total_seen
     elapsed = time.time() - t0
     improved = val_acc > (best_val_acc + MIN_DELTA)
 

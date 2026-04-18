@@ -14,3 +14,11 @@
 目前專案中的完整 CIFAR-10 訓練腳本位於 [train_split.py](/home/s92137/NN/minimal_cuda_cnn/python/train_split.py)，也使用同一個 `.so`。PyTorch 對照 baseline 位於 [train_split_torch_baseline.py](/home/s92137/NN/minimal_cuda_cnn/python/train_split_torch_baseline.py)，兩者共用 `train_config.py`、`cifar10_data.py` 與 `model_init.py` 來維持相同資料切分、初始權重與 Momentum SGD 條件。
 
 CIFAR-10 trainer 目前使用 `conv_backward_precol`、`conv_update_fused` 與 `BatchWorkspace`。`USE_CUBLAS=1` 時 `gemm_forward` 與 conv weight gradient 走 cuBLAS 快速路徑；`USE_CUBLAS=0` 時走手寫 CUDA fallback。MNIST 教學仍偏向最小可讀範例；若要追求速度，請參考 CIFAR trainer 的 workspace 重用與 precol backward 寫法。
+
+從乾淨環境重現 CIFAR-10 實驗時，先執行：
+
+```bash
+make -C cpp check
+python3 python/prepare_cifar10.py
+python3 -u python/train_split.py
+```

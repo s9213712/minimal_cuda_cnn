@@ -20,10 +20,11 @@ cpp/libminimal_cuda_cnn.so
 ## 預設 Makefile 設定
 
 ```makefile
-CC = /usr/local/cuda-13.2/bin/nvcc
+CUDA_HOME ?= /usr/local/cuda
+NVCC ?= $(CUDA_HOME)/bin/nvcc
 USE_CUBLAS ?= 1
 CFLAGS = -O3 -Xcompiler -fPIC -arch=sm_86 -DUSE_CUBLAS=$(USE_CUBLAS)
-LDFLAGS = -shared -o libminimal_cuda_cnn.so -Xlinker -rpath,/usr/local/cuda-13.2/lib64
+LDFLAGS = -shared -o libminimal_cuda_cnn.so -Xlinker -rpath,$(CUDA_HOME)/lib64
 ```
 
 `USE_CUBLAS=1` 是預設快速路徑，會額外 link `-lcublas`，讓 `gemm_forward` 與 `conv_backward` 的 weight gradient 使用 cuBLAS `cublasSgemm`。
@@ -38,6 +39,12 @@ make -C cpp USE_CUBLAS=0
 
 ```bash
 make -C cpp USE_CUBLAS=1
+```
+
+建置並檢查必要匯出符號：
+
+```bash
+make -C cpp check
 ```
 
 目前預設 Makefile 會編進 `.so` 的 `.cu` 檔包含：
@@ -79,6 +86,7 @@ maxpool_forward_store, maxpool_backward_use_idx
 nchw_to_cnhw, cnhw_to_nchw
 leaky_relu_forward, leaky_relu_backward
 softmax_forward, softmax_cross_entropy, softmax_backward
+softmax_xent_grad_loss_acc, count_correct
 apply_sgd_update, apply_momentum_update, conv_update_fused, clip_inplace
 ```
 

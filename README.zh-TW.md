@@ -112,14 +112,27 @@ make -C cpp USE_CUBLAS=0
 如果 CUDA 安裝路徑或 GPU 架構不同，請調整 `cpp/Makefile`：
 
 ```makefile
-CC = /usr/local/cuda-13.2/bin/nvcc
+CUDA_HOME ?= /usr/local/cuda
+NVCC ?= $(CUDA_HOME)/bin/nvcc
 CFLAGS = -O3 -Xcompiler -fPIC -arch=sm_86
 USE_CUBLAS ?= 1
 ```
 
+檢查 `.so` 是否建置成功且匯出必要 API：
+
+```bash
+make -C cpp check
+```
+
 ## 資料
 
-請將 CIFAR-10 Python batch 放在：
+trainer 可自動準備 CIFAR-10：
+
+```bash
+python3 python/prepare_cifar10.py
+```
+
+此命令會下載並解壓 CIFAR-10 Python archive 到：
 
 ```text
 data/cifar-10-batches-py/
@@ -130,6 +143,8 @@ data/cifar-10-batches-py/
   data_batch_5
   test_batch
 ```
+
+如果機器不能連網，請手動將 CIFAR-10 Python batch 解壓後放在同一個目錄。
 
 目前實驗使用全部五個 CIFAR-10 training batch，設定在 `python/train_config.py`：
 
@@ -160,9 +175,11 @@ python/best_model_split.npz
 - `dense_backward_full` 產生 FC weight/bias gradient 與 pool gradient
 - FC/Conv 參數更新使用 GPU fused momentum update、weight decay、gradient clipping
 - pool gradient clipping 使用 GPU in-place clipping
+- softmax、cross-entropy gradient、loss 累加與 batch accuracy 都在 CUDA 端執行；Python 只下載 loss/correct scalar
 - conv forward GEMM 在 `USE_CUBLAS=1` 時使用 cuBLAS，在 `USE_CUBLAS=0` 時使用手寫 GEMM kernel
 - conv backward 的 weight gradient 在 `USE_CUBLAS=1` 時使用 im2col + cuBLAS；`USE_CUBLAS=0` 時仍保留手寫 fallback
 - 每個 batch 的固定 shape GPU buffer 由 `BatchWorkspace` 預先配置並重用，不再在 batch loop 內反覆配置/釋放
+- train/eval 支援 remainder batch，不再丟掉最後不足 `BATCH` 的資料
 - conv backward 會重用 forward 已產生的 im2col buffer，避免 backward 重新 im2col 與額外配置
 
 2026-04-18 `USE_CUBLAS=1` smoke test：`timeout 70s python3 -u python/train_split.py` 可跑到第 6 epoch，單 epoch約 `8.6-14.8s`，第 6 epoch validation accuracy 為 `73.14%`。這不是完整 benchmark，但足以確認速度已從原本 `Batch 100/703` 約兩分鐘降到數秒內。
@@ -204,6 +221,7 @@ Device used:              CPU
 `.so` 使用教學拆成多份文件：
 
 ```text
+docs/USAGE.md
 docs/01_project_files.md
 docs/02_build_shared_library.md
 docs/03_c_api_reference.md

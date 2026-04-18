@@ -112,14 +112,27 @@ make -C cpp USE_CUBLAS=0
 If your CUDA install or GPU architecture differs, edit `cpp/Makefile`:
 
 ```makefile
-CC = /usr/local/cuda-13.2/bin/nvcc
+CUDA_HOME ?= /usr/local/cuda
+NVCC ?= $(CUDA_HOME)/bin/nvcc
 CFLAGS = -O3 -Xcompiler -fPIC -arch=sm_86
 USE_CUBLAS ?= 1
 ```
 
+To verify that the shared object was built and exports the expected API:
+
+```bash
+make -C cpp check
+```
+
 ## Data
 
-Place the CIFAR-10 Python batch files here:
+The trainer can prepare CIFAR-10 automatically:
+
+```bash
+python3 python/prepare_cifar10.py
+```
+
+This downloads and extracts the CIFAR-10 Python archive into:
 
 ```text
 data/cifar-10-batches-py/
@@ -130,6 +143,8 @@ data/cifar-10-batches-py/
   data_batch_5
   test_batch
 ```
+
+If the machine cannot access the network, place the extracted CIFAR-10 Python batch files in that same directory manually.
 
 The current experiment uses all five CIFAR-10 training batches, controlled in `python/train_config.py`:
 
@@ -160,9 +175,11 @@ That checkpoint is ignored by Git.
 - `dense_backward_full` produces FC weight/bias gradients and the pool gradient
 - FC/Conv parameters use fused GPU momentum update with weight decay and gradient clipping
 - pool gradients use GPU in-place clipping
+- softmax, cross-entropy gradient, loss accumulation, and batch accuracy run in CUDA; Python only downloads scalar loss/correct counts
 - conv forward GEMM uses cuBLAS when `USE_CUBLAS=1`, or the handwritten GEMM kernel when `USE_CUBLAS=0`
 - conv backward weight gradients use im2col + cuBLAS when `USE_CUBLAS=1`; the handwritten fallback remains available when `USE_CUBLAS=0`
 - fixed-shape per-batch GPU buffers are allocated once in `BatchWorkspace` and reused across the batch loop
+- train/eval support remainder batches instead of dropping the final partial batch
 - conv backward reuses the forward im2col buffers instead of recomputing im2col and allocating extra scratch space
 
 2026-04-18 smoke test with `USE_CUBLAS=1`: `timeout 70s python3 -u python/train_split.py` reached epoch 6, with epochs taking about `8.6-14.8s` and epoch-6 validation accuracy at `73.14%`. This is not a full benchmark, but it confirms the previous `Batch 100/703` speed point dropped from roughly two minutes to a few seconds.
@@ -204,6 +221,7 @@ The current full-dataset configuration has not been fully benchmarked yet. PyTor
 The shared object usage guide is split across:
 
 ```text
+docs/USAGE.md
 docs/01_project_files.md
 docs/02_build_shared_library.md
 docs/03_c_api_reference.md
