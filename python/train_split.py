@@ -45,6 +45,7 @@ LR_CONV1 = 0.001
 LR_CONV = 0.005
 LR_FC = 0.005
 LEAKY_ALPHA = 0.1
+GRAD_DEBUG = os.environ.get("GRAD_DEBUG") == "1"
 
 C1_IN, C1_OUT = 3, 32
 C2_IN, C2_OUT = 32, 32
@@ -114,8 +115,10 @@ def maxpool_forward(d_input_cnhw, n, c, h, w):
     return d_pool, d_idx, out_h, out_w
 
 
-def update_conv(d_weight, d_grad, lr, size):
+def update_conv(d_weight, d_grad, lr, size, name):
     h_grad = g2h(d_grad, size).reshape(-1)
+    if GRAD_DEBUG:
+        print(f"    {name} grad_abs_mean={np.mean(np.abs(h_grad)):.6e} grad_abs_max={np.max(np.abs(h_grad)):.6e}")
     h_grad_clip = np.clip(h_grad, -1.0, 1.0).astype(np.float32)
     lib.gpu_memcpy_h2d(d_grad, h_grad_clip.ctypes.data, size * 4)
     lib.apply_sgd_update(d_weight, d_grad, c_float(lr), size)
@@ -302,6 +305,7 @@ for epoch in range(EPOCHS):
 
         labels_onehot = np.zeros((BATCH, 10), dtype=np.float32)
         labels_onehot[np.arange(BATCH), y] = 1.0
+        # Mean cross-entropy scaling belongs here. Do not divide downstream conv gradients again.
         d_logits = (probs - labels_onehot) / BATCH
 
         grad_fc_w = d_logits.T @ h_pool2
@@ -333,7 +337,7 @@ for epoch in range(EPOCHS):
             d_conv4_grad_raw, d_conv3_nchw, d_w_conv4, d_w_conv4_grad, d_conv3_grad,
             BATCH, C4_IN, H3, W3, KH, KW, H4, W4, C4_OUT,
         )
-        update_conv(d_w_conv4, d_w_conv4_grad, LR_CONV, C4_OUT * C4_IN * KH * KW)
+        update_conv(d_w_conv4, d_w_conv4_grad, LR_CONV, C4_OUT * C4_IN * KH * KW, "conv4")
 
         # Conv3 backward.
         d_conv3_grad_raw = nchw_to_cnhw_alloc(d_conv3_grad, BATCH, C3_OUT, H3, W3)
@@ -344,7 +348,7 @@ for epoch in range(EPOCHS):
             d_conv3_grad_raw, d_pool1_nchw, d_w_conv3, d_w_conv3_grad, d_pool1_grad,
             BATCH, C3_IN, P1H, P1W, KH, KW, H3, W3, C3_OUT,
         )
-        update_conv(d_w_conv3, d_w_conv3_grad, LR_CONV, C3_OUT * C3_IN * KH * KW)
+        update_conv(d_w_conv3, d_w_conv3_grad, LR_CONV, C3_OUT * C3_IN * KH * KW, "conv3")
 
         # Conv2 backward.
         d_pool1_grad_cnhw = nchw_to_cnhw_alloc(d_pool1_grad, BATCH, C2_OUT, P1H, P1W)
@@ -357,7 +361,7 @@ for epoch in range(EPOCHS):
             d_conv2_grad_raw, d_conv1_nchw, d_w_conv2, d_w_conv2_grad, d_conv1_grad,
             BATCH, C2_IN, H1, W1, KH, KW, H2, W2, C2_OUT,
         )
-        update_conv(d_w_conv2, d_w_conv2_grad, LR_CONV, C2_OUT * C2_IN * KH * KW)
+        update_conv(d_w_conv2, d_w_conv2_grad, LR_CONV, C2_OUT * C2_IN * KH * KW, "conv2")
 
         # Conv1 backward.
         d_conv1_grad_raw = nchw_to_cnhw_alloc(d_conv1_grad, BATCH, C1_OUT, H1, W1)
@@ -368,7 +372,7 @@ for epoch in range(EPOCHS):
             d_conv1_grad_raw, d_x, d_w_conv1, d_w_conv1_grad, d_x_grad,
             BATCH, C1_IN, H, W, KH, KW, H1, W1, C1_OUT,
         )
-        update_conv(d_w_conv1, d_w_conv1_grad, LR_CONV1, C1_OUT * C1_IN * KH * KW)
+        update_conv(d_w_conv1, d_w_conv1_grad, LR_CONV1, C1_OUT * C1_IN * KH * KW, "conv1")
 
         for ptr in [
             d_x, d_col1, d_conv1_raw, d_conv1_nchw,
