@@ -9,3 +9,6 @@ __pycache__/
 # Large local CIFAR-10 batches
 data/cifar-10-batches-py/data_batch_*
 data/cifar-10-batches-py/test_batch
+
+# Local analysis notes
+bug.txt
