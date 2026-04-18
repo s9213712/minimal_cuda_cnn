@@ -85,7 +85,7 @@ The CUDA implementation path does not depend on PyTorch. PyTorch is only used as
 Build the CUDA shared library:
 
 ```bash
-cd /home/s92137/NN/minimal_cuda_cnn
+cd minimal_cuda_cnn
 make -C cpp
 ```
 
@@ -157,7 +157,7 @@ TRAIN_BATCH_IDS = (1, 2, 3, 4, 5)
 ## Run CUDA Trainer
 
 ```bash
-cd /home/s92137/NN/minimal_cuda_cnn
+cd minimal_cuda_cnn
 python3 python/train_split.py
 ```
 
@@ -187,7 +187,7 @@ That checkpoint is ignored by Git.
 ## Run PyTorch Baseline
 
 ```bash
-cd /home/s92137/NN/minimal_cuda_cnn
+cd minimal_cuda_cnn
 python3 python/train_split_torch_baseline.py
 ```
 

@@ -85,7 +85,7 @@ CUDA 實作本身不依賴 PyTorch。PyTorch 只作為 baseline/reference traine
 編譯 CUDA shared library：
 
 ```bash
-cd /home/s92137/NN/minimal_cuda_cnn
+cd minimal_cuda_cnn
 make -C cpp
 ```
 
@@ -157,7 +157,7 @@ TRAIN_BATCH_IDS = (1, 2, 3, 4, 5)
 ## 執行 CUDA Trainer
 
 ```bash
-cd /home/s92137/NN/minimal_cuda_cnn
+cd minimal_cuda_cnn
 python3 python/train_split.py
 ```
 
@@ -187,7 +187,7 @@ python/best_model_split.npz
 ## 執行 PyTorch Baseline
 
 ```bash
-cd /home/s92137/NN/minimal_cuda_cnn
+cd minimal_cuda_cnn
 python3 python/train_split_torch_baseline.py
 ```
 
