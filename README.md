@@ -31,9 +31,9 @@ Both the handwritten CUDA trainer and the PyTorch baseline use the same comparis
 - Architecture: valid 3x3 conv stack, no padding
 - Activation: LeakyReLU with alpha `0.1`
 - Optimizer behavior: manual Momentum SGD updates, weight decay, gradient clipping, and LR plateau reduction
-- Initial learning rates: `0.002` for conv1, other conv layers, and FC
+- Initial learning rates: `0.005` for conv1, other conv layers, and FC
 - Momentum: `0.9`
-- Conv gradient spatial normalization: enabled per layer using that layer's output `H*W`
+- Conv gradient spatial normalization: currently disabled
 
 Architecture:
 
@@ -73,6 +73,7 @@ The split keeps `train_split.py` focused on the training loop and backward pass.
 
 - NVIDIA GPU for the handwritten CUDA trainer
 - CUDA toolkit
+- Optional cuBLAS, usually installed with the CUDA toolkit. Enabled by default for speed, but the handwritten CUDA fallback remains available.
 - Python 3
 - NumPy
 - PyTorch for `python/train_split_torch_baseline.py`
@@ -94,11 +95,26 @@ This produces:
 cpp/libminimal_cuda_cnn.so
 ```
 
+By default, the shared object links cuBLAS. `gemm_forward` and the conv weight-gradient path in `conv_backward` use `cublasSgemm`.
+
+To build the fast cuBLAS backend:
+
+```bash
+make -C cpp USE_CUBLAS=1
+```
+
+To build the from-scratch fallback without linking cuBLAS:
+
+```bash
+make -C cpp USE_CUBLAS=0
+```
+
 If your CUDA install or GPU architecture differs, edit `cpp/Makefile`:
 
 ```makefile
 CC = /usr/local/cuda-13.2/bin/nvcc
 CFLAGS = -O3 -Xcompiler -fPIC -arch=sm_86
+USE_CUBLAS ?= 1
 ```
 
 ## Data
@@ -138,11 +154,30 @@ python/best_model_split.npz
 
 That checkpoint is ignored by Git.
 
+`train_split.py` now keeps the main FC backward and optimizer updates on GPU:
+
+- `dense_forward` consumes `d_pool2_nchw` directly instead of doing `d_pool2_nchw -> CPU -> GPU`
+- `dense_backward_full` produces FC weight/bias gradients and the pool gradient
+- FC/Conv parameters use fused GPU momentum update with weight decay and gradient clipping
+- pool gradients use GPU in-place clipping
+- conv forward GEMM uses cuBLAS when `USE_CUBLAS=1`, or the handwritten GEMM kernel when `USE_CUBLAS=0`
+- conv backward weight gradients use im2col + cuBLAS when `USE_CUBLAS=1`; the handwritten fallback remains available when `USE_CUBLAS=0`
+- fixed-shape per-batch GPU buffers are allocated once in `BatchWorkspace` and reused across the batch loop
+- conv backward reuses the forward im2col buffers instead of recomputing im2col and allocating extra scratch space
+
+2026-04-18 smoke test with `USE_CUBLAS=1`: `timeout 70s python3 -u python/train_split.py` reached epoch 6, with epochs taking about `8.6-14.8s` and epoch-6 validation accuracy at `73.14%`. This is not a full benchmark, but it confirms the previous `Batch 100/703` speed point dropped from roughly two minutes to a few seconds.
+
 ## Run PyTorch Baseline
 
 ```bash
 cd /home/s92137/NN/minimal_cuda_cnn
 python3 python/train_split_torch_baseline.py
+```
+
+If CUDA/NVML initialization crashes PyTorch in the current environment, force the baseline to CPU:
+
+```bash
+FORCE_CPU=1 python3 python/train_split_torch_baseline.py
 ```
 
 The PyTorch baseline saves its best local checkpoint to:

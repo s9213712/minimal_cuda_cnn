@@ -14,6 +14,7 @@
 | `maxpool_forward_store` input/output | CNHW |
 | `dense_forward` input | 一般 row-major `(N, features)`，可由 CNHW pool output 轉 NCHW 後 flatten |
 | `conv_backward` input | input 使用 NCHW；`grad_out` 在目前訓練流程可直接使用 conv raw 的 CNHW buffer |
+| `conv_backward_precol` col | 來自同層 forward `im2col_forward` 的 row-major `(C*KH*KW, N*outH*outW)` buffer |
 
 建議習慣：
 
@@ -90,7 +91,13 @@ cuda-memcheck python3 -u /tmp/so_function_check.py
 如果改到 optimizer，確認 `.so` 有匯出 Momentum update：
 
 ```bash
-nm -D cpp/libminimal_cuda_cnn.so | grep apply_momentum_update
+nm -D cpp/libminimal_cuda_cnn.so | grep -E 'apply_momentum_update|conv_update_fused|clip_inplace'
+```
+
+如果改到 convolution backward，確認 precol API 有匯出：
+
+```bash
+nm -D cpp/libminimal_cuda_cnn.so | grep conv_backward_precol
 ```
 
 若要確認 CIFAR-10 訓練腳本能啟動：
@@ -132,5 +139,5 @@ cuda-memcheck python3 -u your_script.py
 1. 只跑 FC baseline，確認 loss 會下降。
 2. 加 Conv + ReLU，不加 Pool。
 3. 再加 Pool。
-4. 每一步都檢查 gradient scale。`conv_backward` 的 weight gradient 會累加 batch，若 learning rate 太大，可能需要除以 batch 或降低 LR。
+4. 每一步都檢查 gradient scale。`conv_backward`/`conv_backward_precol` 的 weight gradient 會累加傳入的 `grad_out`，目前 CIFAR trainer 會先在 logits gradient 做 batch mean，再交給後續 backward。
 5. 使用 Momentum SGD 時，velocity buffer 不能每個 batch 重設；它必須從訓練開始保留到訓練結束。

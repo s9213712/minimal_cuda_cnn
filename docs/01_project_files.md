@@ -53,12 +53,12 @@ minimal_cuda_cnn/
 | 檔案 | 作用 |
 |---|---|
 | `memory.cu` | 匯出 `gpu_malloc`、`gpu_free`、`gpu_memcpy_h2d`、`gpu_memcpy_d2h`、`gpu_memset`，供 Python/C++ 管理 GPU 記憶體。 |
-| `core.cu` | 基礎 forward kernel：`im2col_forward`、`gemm_forward`、`apply_relu`、`apply_maxpool`。 |
+| `core.cu` | 基礎 forward kernel：`im2col_forward`、`gemm_forward`、`apply_relu`、`apply_maxpool`。`USE_CUBLAS=1` 時 `gemm_forward` 使用 cuBLAS；`USE_CUBLAS=0` 時使用手寫 GEMM kernel。 |
 | `backward.cu` | ReLU backward 與不保存 index 的 NCHW maxpool backward。 |
-| `conv_backward.cu` | 卷積層 backward：計算 conv weight gradient 與 input gradient。 |
+| `conv_backward.cu` | 卷積層 backward：`USE_CUBLAS=1` 時 weight gradient 使用 im2col + cuBLAS GEMM；`USE_CUBLAS=0` 時保留手寫 CUDA fallback。input gradient 仍使用直接 CUDA kernel。訓練主流程使用 `conv_backward_precol` 重用 forward im2col buffer。 |
 | `dense_layer.cu` | 全連接層 forward/backward：`dense_forward`、`dense_backward_full`。 |
 | `loss_layer.cu` | `softmax_forward`、`softmax_cross_entropy`、`softmax_backward`，另含 `im2col_backward`、`gemm_backward`。 |
-| `optimizer.cu` | Optimizer kernel。`apply_sgd_update` 執行純 SGD；`apply_momentum_update` 執行 Momentum SGD，更新公式為 `velocity = momentum * velocity - lr * grad`、`weights += velocity`。 |
+| `optimizer.cu` | Optimizer kernel。`apply_sgd_update` 執行純 SGD；`apply_momentum_update` 執行 Momentum SGD；`conv_update_fused` 在 GPU 端合併 weight decay、gradient clipping、momentum update；`clip_inplace` 做 GPU in-place gradient clipping。 |
 | `layout_convert.cu` | `nchw_to_cnhw` 與 `cnhw_to_nchw`。部分 kernel 輸出以 CNHW 儲存，訓練時常需要轉換。 |
 | `reorganize.cu` / `reorganize_backward.cu` | 舊版 layout 重排 API。新程式建議優先用 `layout_convert.cu` 的明確 NCHW/CNHW 函式。 |
 | `maxpool_store.cu` | 帶 max index 的 maxpool forward：`maxpool_forward_store`。 |
@@ -75,7 +75,7 @@ minimal_cuda_cnn/
 
 | 檔案 | 作用 |
 |---|---|
-| `train_split.py` | 手寫 CUDA CIFAR-10 trainer。主要保留訓練 loop、backward pass、scheduler、early stopping。 |
+| `train_split.py` | 手寫 CUDA CIFAR-10 trainer。主要保留訓練 loop、backward pass、scheduler、early stopping，並用 `BatchWorkspace` 重用固定 shape 的 batch GPU buffer。 |
 | `train_split_torch_baseline.py` | PyTorch baseline。使用同一個資料切分、模型架構、初始權重、Momentum SGD 條件，方便和 CUDA trainer 比較。 |
 | `train_config.py` | 共享訓練參數與模型 shape。包含 full CIFAR `45000/5000` split、`BATCH`、`EPOCHS`、`LR_*`、`MOMENTUM`、`WEIGHT_DECAY`、gradient clipping、conv spatial gradient normalization 與 conv shape。 |
 | `cifar10_data.py` | CIFAR-10 batch 讀取、train/val/test split、CIFAR mean/std normalization。 |

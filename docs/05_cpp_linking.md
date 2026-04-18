@@ -15,6 +15,16 @@ void gpu_memcpy_d2h(void* dst, const void* src, size_t size);
 
 void dense_forward(float* d_input, float* d_weights, float* d_bias, float* d_output,
                    int N, int in_f, int out_f);
+
+void conv_backward_precol(float* grad_out, float* input, float* weights,
+                          float* grad_weights, float* grad_input,
+                          float* col,
+                          int N, int C, int H, int W,
+                          int KH, int KW, int outH, int outW, int OUT_C);
+
+void conv_update_fused(float* weights, float* grad, float* velocity,
+                       float lr, float momentum, float weight_decay,
+                       float clip_val, float normalizer, int size);
 }
 ```
 
@@ -96,12 +106,12 @@ g++ examples/mnist_infer_demo.cpp \
 如果要從 C++ 做完整訓練，流程和 Python 相同：
 
 1. 準備 NCHW float32 input，例如 MNIST 為 `(N, 1, 28, 28)`。
-2. 用 `gpu_malloc` 配置 input、weights、bias、intermediate buffer。
+2. 用 `gpu_malloc` 配置 input、weights、bias、intermediate buffer。固定 shape 的 batch buffer 建議在訓練開始前配置一次，跨 batch 重用。
 3. Forward：`im2col_forward -> gemm_forward -> activation -> maxpool_forward_store -> layout convert -> dense_forward`。
 4. 在 host 或 device 計算 loss gradient。若在 host 計算，將 logits copy 回 CPU，做 softmax/cross entropy，再 upload gradient。
-5. Backward：`dense_backward_full -> layout convert -> maxpool_backward_use_idx -> activation backward -> conv_backward`。
-6. Update：建議用 `apply_momentum_update` 更新 weights/bias；每個 trainable buffer 需要一個同長度 velocity buffer，訓練開始前清為 0 並跨 batch 保留。若只做最小測試，可用 `apply_sgd_update`。
-7. 每個 batch 結束後釋放暫存 buffer。
+5. Backward：`dense_backward_full -> layout convert -> maxpool_backward_use_idx -> activation backward -> conv_backward_precol`。若 forward 的 col buffer 沒有保留，可退回使用 `conv_backward`。
+6. Update：目前建議用 `conv_update_fused` 更新 weights/bias，讓 weight decay、gradient clipping、Momentum update 都留在 GPU。每個 trainable buffer 需要一個同長度 velocity buffer，訓練開始前清為 0 並跨 batch 保留。若只做最小測試，可用 `apply_sgd_update` 或 `apply_momentum_update`。
+7. 訓練結束後釋放 workspace、weights、velocity；不要每個 batch 反覆釋放固定 shape 的暫存 buffer。
 
 Momentum update 的 C ABI prototype：
 
@@ -109,6 +119,10 @@ Momentum update 的 C ABI prototype：
 extern "C" {
 void apply_momentum_update(float* weights, float* grad, float* velocity,
                            float lr, float momentum, int size);
+
+void conv_update_fused(float* weights, float* grad, float* velocity,
+                       float lr, float momentum, float weight_decay,
+                       float clip_val, float normalizer, int size);
 }
 ```
 
@@ -118,6 +132,17 @@ void apply_momentum_update(float* weights, float* grad, float* velocity,
 velocity[i] = momentum * velocity[i] - lr * grad[i]
 weights[i] += velocity[i]
 ```
+
+`conv_update_fused` 的更新公式：
+
+```text
+g = grad[i] / normalizer + weight_decay * weights[i]
+g = clip(g, -clip_val, clip_val)
+velocity[i] = momentum * velocity[i] - lr * g
+weights[i] += velocity[i]
+```
+
+Bias update 可把 `weight_decay` 設為 `0.0`。
 
 ## 注意事項
 

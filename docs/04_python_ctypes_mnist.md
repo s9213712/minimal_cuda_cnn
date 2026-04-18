@@ -30,8 +30,12 @@ lib.leaky_relu_forward.argtypes = [c_void_p, c_float, c_int]
 lib.leaky_relu_backward.argtypes = [c_void_p, c_void_p, c_float, c_int]
 lib.dense_forward.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int]
 lib.dense_backward_full.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int]
+lib.conv_backward.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int, c_int, c_int, c_int, c_int, c_int]
+lib.conv_backward_precol.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int, c_int, c_int, c_int, c_int, c_int]
 lib.apply_sgd_update.argtypes = [c_void_p, c_void_p, c_float, c_int]
 lib.apply_momentum_update.argtypes = [c_void_p, c_void_p, c_void_p, c_float, c_float, c_int]
+lib.conv_update_fused.argtypes = [c_void_p, c_void_p, c_void_p, c_float, c_float, c_float, c_float, c_float, c_int]
+lib.clip_inplace.argtypes = [c_void_p, c_float, c_int]
 ```
 
 ## Host/device helper
@@ -115,9 +119,11 @@ dense_backward_full
 nchw_to_cnhw
 maxpool_backward_use_idx
 leaky_relu_backward
-conv_backward
-apply_momentum_update
+conv_backward 或 conv_backward_precol
+apply_momentum_update 或 conv_update_fused
 ```
+
+如果 forward 階段保留了 `im2col_forward` 產生的 `d_col`，backward 建議使用 `conv_backward_precol`，避免重複 im2col 與配置 scratch buffer。`conv_backward` 仍可用於最小範例，因為它會在函式內自行建立 col buffer。
 
 Momentum SGD 需要為每個 trainable buffer 準備同長度的 velocity buffer，訓練開始前設為 0，整個訓練期間保留：
 
@@ -130,7 +136,23 @@ d_v_bias = zeros(10)
 lib.apply_momentum_update(d_w_conv, d_grad_conv, d_v_conv, c_float(lr), c_float(MOMENTUM), OUT_C * C_IN * KH * KW)
 ```
 
-若只想做最小化測試，也可以繼續使用 `apply_sgd_update`；目前 CIFAR-10 trainer 預設使用 Momentum SGD。
+若需要 weight decay、gradient clipping 與 Momentum update 一次留在 GPU 端完成，可改用 `conv_update_fused`：
+
+```python
+lib.conv_update_fused(
+    d_w_conv,
+    d_grad_conv,
+    d_v_conv,
+    c_float(lr),
+    c_float(MOMENTUM),
+    c_float(weight_decay),
+    c_float(clip_value),
+    c_float(grad_normalizer),
+    OUT_C * C_IN * KH * KW,
+)
+```
+
+若只想做最小化測試，也可以繼續使用 `apply_sgd_update`。目前 CIFAR-10 trainer 預設使用 `conv_update_fused`，並用 `BatchWorkspace` 重用固定大小的 batch buffer。
 
 ## 完整範例檔
 

@@ -65,6 +65,12 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BEST_MODEL_PATH = os.path.join(ROOT, "python", "best_model_split_torch.pt")
 
 
+def get_device():
+    if os.environ.get("FORCE_CPU", "0") == "1":
+        return torch.device("cpu")
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
 class TorchCifarCnn(nn.Module):
     def __init__(self):
         super().__init__()
@@ -154,9 +160,9 @@ def evaluate(model, x, y, device, batch_size=BATCH, max_batches=EVAL_MAX_BATCHES
 
 
 def main():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = get_device()
     torch.manual_seed(INIT_SEED)
-    if torch.cuda.is_available():
+    if device.type == "cuda":
         torch.cuda.manual_seed_all(INIT_SEED)
 
     data_root = os.path.join(ROOT, "data", "cifar-10-batches-py")

@@ -31,9 +31,9 @@ Minimal CUDA CNN 是一個實驗性的 CUDA/C++ 與 Python 專案，用來訓練
 - 架構：valid 3x3 convolution stack，不使用 padding
 - Activation：LeakyReLU，alpha `0.1`
 - Optimizer：手動 Momentum SGD update、weight decay、gradient clipping、LR plateau reduction
-- 初始 learning rate：conv1、其他 conv、FC 都是 `0.002`
+- 初始 learning rate：conv1、其他 conv、FC 都是 `0.005`
 - Momentum：`0.9`
-- Conv gradient spatial normalization：依照各層輸出 `H*W` 啟用
+- Conv gradient spatial normalization：目前關閉
 
 模型架構：
 
@@ -73,6 +73,7 @@ python/
 
 - NVIDIA GPU，供手寫 CUDA trainer 使用
 - CUDA toolkit
+- 可選 cuBLAS，通常隨 CUDA toolkit 安裝。預設啟用以加速，但保留純手寫 CUDA fallback。
 - Python 3
 - NumPy
 - PyTorch，僅供 `python/train_split_torch_baseline.py` baseline 使用
@@ -94,11 +95,26 @@ make -C cpp
 cpp/libminimal_cuda_cnn.so
 ```
 
+預設 `.so` 會連結 cuBLAS，`gemm_forward` 與 `conv_backward` 的 conv weight gradient 路徑都使用 `cublasSgemm`。
+
+編譯快速 cuBLAS backend：
+
+```bash
+make -C cpp USE_CUBLAS=1
+```
+
+編譯不連結 cuBLAS 的 from-scratch fallback：
+
+```bash
+make -C cpp USE_CUBLAS=0
+```
+
 如果 CUDA 安裝路徑或 GPU 架構不同，請調整 `cpp/Makefile`：
 
 ```makefile
 CC = /usr/local/cuda-13.2/bin/nvcc
 CFLAGS = -O3 -Xcompiler -fPIC -arch=sm_86
+USE_CUBLAS ?= 1
 ```
 
 ## 資料
@@ -138,11 +154,30 @@ python/best_model_split.npz
 
 這個 checkpoint 已被 Git ignore。
 
+目前 `train_split.py` 已把主要 FC backward 與 optimizer update 留在 GPU：
+
+- `dense_forward` 直接使用 `d_pool2_nchw`，不再做 `d_pool2_nchw -> CPU -> GPU`
+- `dense_backward_full` 產生 FC weight/bias gradient 與 pool gradient
+- FC/Conv 參數更新使用 GPU fused momentum update、weight decay、gradient clipping
+- pool gradient clipping 使用 GPU in-place clipping
+- conv forward GEMM 在 `USE_CUBLAS=1` 時使用 cuBLAS，在 `USE_CUBLAS=0` 時使用手寫 GEMM kernel
+- conv backward 的 weight gradient 在 `USE_CUBLAS=1` 時使用 im2col + cuBLAS；`USE_CUBLAS=0` 時仍保留手寫 fallback
+- 每個 batch 的固定 shape GPU buffer 由 `BatchWorkspace` 預先配置並重用，不再在 batch loop 內反覆配置/釋放
+- conv backward 會重用 forward 已產生的 im2col buffer，避免 backward 重新 im2col 與額外配置
+
+2026-04-18 `USE_CUBLAS=1` smoke test：`timeout 70s python3 -u python/train_split.py` 可跑到第 6 epoch，單 epoch約 `8.6-14.8s`，第 6 epoch validation accuracy 為 `73.14%`。這不是完整 benchmark，但足以確認速度已從原本 `Batch 100/703` 約兩分鐘降到數秒內。
+
 ## 執行 PyTorch Baseline
 
 ```bash
 cd /home/s92137/NN/minimal_cuda_cnn
 python3 python/train_split_torch_baseline.py
+```
+
+如果目前環境的 CUDA/NVML 初始化會導致 PyTorch crash 或 segmentation fault，可先強制使用 CPU：
+
+```bash
+FORCE_CPU=1 python3 python/train_split_torch_baseline.py
 ```
 
 PyTorch baseline 會將最佳本機 checkpoint 存到：
@@ -162,7 +197,7 @@ Early stopping:           epoch 33
 Device used:              CPU
 ```
 
-目前 full-dataset 設定尚未完整 benchmark。此環境中 PyTorch 回報 `torch.cuda.is_available() == False`，所以上述 baseline 使用 CPU 跑完。若 PyTorch 能看到 CUDA device，腳本會自動改用 CUDA。
+目前 full-dataset 設定尚未完整 benchmark。此環境中 PyTorch 回報 `torch.cuda.is_available() == False` 且 NVML 初始化失敗；若 PyTorch 能看到 CUDA device，腳本會自動改用 CUDA。
 
 ## Shared Object 文件
 
@@ -200,10 +235,10 @@ python3 -c "import sys, torch; sys.path.insert(0, 'python'); from model_init imp
 0.0
 ```
 
-檢查 `.so` 是否匯出 Momentum optimizer：
+檢查 `.so` 是否匯出 Momentum optimizer 與 fused update：
 
 ```bash
-nm -D cpp/libminimal_cuda_cnn.so | grep apply_momentum_update
+nm -D cpp/libminimal_cuda_cnn.so | grep -E 'apply_momentum_update|conv_update_fused|clip_inplace'
 ```
 
 ## 備註

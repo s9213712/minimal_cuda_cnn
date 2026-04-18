@@ -24,14 +24,29 @@ lib.gemm_forward.argtypes = [c_void_p, c_void_p, c_void_p, c_int, c_int, c_int]
 lib.leaky_relu_forward.argtypes = [c_void_p, c_float, c_int]
 lib.leaky_relu_backward.argtypes = [c_void_p, c_void_p, c_float, c_int]
 lib.dense_forward.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int]
+lib.dense_backward_full.argtypes = [
+    c_void_p, c_void_p, c_void_p,
+    c_void_p, c_void_p, c_void_p,
+    c_int, c_int, c_int,
+]
 lib.apply_sgd_update.argtypes = [c_void_p, c_void_p, c_float, c_int]
 lib.apply_momentum_update.argtypes = [c_void_p, c_void_p, c_void_p, c_float, c_float, c_int]
+lib.conv_update_fused.argtypes = [
+    c_void_p, c_void_p, c_void_p,
+    c_float, c_float, c_float, c_float, c_float,
+    c_int,
+]
+lib.clip_inplace.argtypes = [c_void_p, c_float, c_int]
 lib.nchw_to_cnhw.argtypes = [c_void_p, c_void_p, c_int, c_int, c_int, c_int]
 lib.cnhw_to_nchw.argtypes = [c_void_p, c_void_p, c_int, c_int, c_int, c_int]
 lib.maxpool_forward_store.argtypes = [c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int]
 lib.maxpool_backward_use_idx.argtypes = [c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int]
 lib.conv_backward.argtypes = [
     c_void_p, c_void_p, c_void_p, c_void_p, c_void_p,
+    c_int, c_int, c_int, c_int, c_int, c_int, c_int, c_int, c_int,
+]
+lib.conv_backward_precol.argtypes = [
+    c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p,
     c_int, c_int, c_int, c_int, c_int, c_int, c_int, c_int, c_int,
 ]
 
@@ -101,12 +116,21 @@ def update_conv(
     grad_normalizer=1.0,
     log_grad=False,
 ):
-    h_grad = g2h(d_grad, size).reshape(-1)
-    h_grad = h_grad / grad_normalizer
-    h_weight = g2h(d_weight, size).reshape(-1)
-    h_grad = h_grad + weight_decay * h_weight
     if log_grad:
+        h_grad = g2h(d_grad, size).reshape(-1)
+        h_grad = h_grad / grad_normalizer
+        h_weight = g2h(d_weight, size).reshape(-1)
+        h_grad = h_grad + weight_decay * h_weight
         print(f"    {name} grad_abs_mean={np.mean(np.abs(h_grad)):.6e} grad_abs_max={np.max(np.abs(h_grad)):.6e}")
-    h_grad_clip = np.clip(h_grad, -clip_value, clip_value).astype(np.float32)
-    lib.gpu_memcpy_h2d(d_grad, h_grad_clip.ctypes.data, size * 4)
-    lib.apply_momentum_update(d_weight, d_grad, d_velocity, c_float(lr), c_float(momentum), size)
+
+    lib.conv_update_fused(
+        d_weight,
+        d_grad,
+        d_velocity,
+        c_float(lr),
+        c_float(momentum),
+        c_float(weight_decay),
+        c_float(clip_value),
+        c_float(grad_normalizer),
+        size,
+    )

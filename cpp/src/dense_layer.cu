@@ -36,7 +36,7 @@ __global__ void dense_backward_input_kernel(const float* d_out, const float* wei
     d_input[idx] = sum;
 }
 
-// FC Backward: dL/dweights = input^T @ dL/dout
+// FC Backward: dL/dweights = dL/dout^T @ input
 // d_weights[out_f, in_f] += input[n] * d_out[n, out_f] (for each n)
 __global__ void dense_backward_weights_kernel(const float* d_out, const float* input, float* d_weights,
                                                 int N, int in_f, int out_f) {
@@ -51,8 +51,7 @@ __global__ void dense_backward_weights_kernel(const float* d_out, const float* i
     for (int n = 0; n < N; n++) {
         sum += input[n * in_f + i] * d_out[n * out_f + col];
     }
-    // Normalize by batch (critical for stability!)
-    d_weights[idx] = sum / (float)N;
+    d_weights[idx] = sum;
 }
 
 // FC Backward: dL/dweights with atomicAdd for safe accumulation across thread blocks
@@ -83,7 +82,7 @@ __global__ void dense_backward_bias_kernel(const float* d_out, float* d_bias, in
     for (int n = 0; n < N; n++) {
         sum += d_out[n * out_f + idx];
     }
-    d_bias[idx] = sum / (float)N;
+    d_bias[idx] = sum;
 }
 
 CudaTensor* DenseLayer::forward(CudaTensor* input) {

@@ -1,8 +1,39 @@
 #include "tensor.h"
 #include "cuda_check.h"
 #include <cuda_runtime.h>
+#ifndef USE_CUBLAS
+#define USE_CUBLAS 1
+#endif
+
+#if USE_CUBLAS
+#include <cublas_v2.h>
+#include <cstdio>
+#include <cstdlib>
+#endif
 #include <iostream>
 #include <vector>
+
+#if USE_CUBLAS
+static cublasHandle_t g_cublas = nullptr;
+
+static void cublas_check(cublasStatus_t status, const char* expr, const char* file, int line) {
+    if (status != CUBLAS_STATUS_SUCCESS) {
+        std::fprintf(stderr, "cuBLAS error at %s:%d: %s failed with status %d\n",
+                     file, line, expr, static_cast<int>(status));
+        std::fflush(stderr);
+        std::abort();
+    }
+}
+
+#define CUBLAS_CHECK(expr) cublas_check((expr), #expr, __FILE__, __LINE__)
+
+static cublasHandle_t get_cublas() {
+    if (!g_cublas) {
+        CUBLAS_CHECK(cublasCreate(&g_cublas));
+    }
+    return g_cublas;
+}
+#endif
 
 // -----------------------------------------------------------------------------
 // CUDA Kernels
@@ -47,7 +78,9 @@ __global__ void gemm_kernel(const float* A, const float* B, float* C_out, int M,
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     if (row < M && col < N) {
         float sum = 0.0f;
-        for (int i = 0; i < K; ++i) sum += A[row * K + i] * B[i * N + col];
+        for (int i = 0; i < K; ++i) {
+            sum += A[row * K + i] * B[i * N + col];
+        }
         C_out[row * N + col] = sum;
     }
 }
@@ -61,10 +94,35 @@ extern "C" {
     }
 
     void gemm_forward(float* d_A, float* d_B, float* d_C, int M, int N, int K) {
+#if USE_CUBLAS
+        cublasHandle_t handle = get_cublas();
+        const float alpha = 1.0f;
+        const float beta = 0.0f;
+
+        // Row-major C[M, N] = A[M, K] * B[K, N].
+        // cuBLAS is column-major, so compute C^T[N, M] = B^T[N, K] * A^T[K, M].
+        CUBLAS_CHECK(cublasSgemm(
+            handle,
+            CUBLAS_OP_N,
+            CUBLAS_OP_N,
+            N,
+            M,
+            K,
+            &alpha,
+            d_B,
+            N,
+            d_A,
+            K,
+            &beta,
+            d_C,
+            N
+        ));
+#else
         dim3 block(16, 16);
         dim3 grid((N + 15) / 16, (M + 15) / 16);
         gemm_kernel<<<grid, block>>>(d_A, d_B, d_C, M, N, K);
         CUDA_KERNEL_CHECK();
+#endif
     }
 
     void apply_relu(float* d_data, int size) {
