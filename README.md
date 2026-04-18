@@ -18,15 +18,34 @@ CIFAR-10 dataset files, compiled `.so` files, `__pycache__`, and training checkp
 
 From a clean machine with CUDA, `nvcc`, Python, and NumPy available:
 
+Clone the repository:
+
 ```bash
 git clone https://github.com/s9213712/minimal_cuda_cnn.git
 cd minimal_cuda_cnn
-make -C cpp
+```
+
+Compile the CUDA shared library:
+
+```bash
+make -C cpp check
+```
+
+This builds `cpp/libminimal_cuda_cnn.so` and verifies that the required C API symbols are exported. The default build uses `USE_CUBLAS=1`; use `make -C cpp check USE_CUBLAS=0` to build the handwritten fallback path without cuBLAS.
+
+Prepare CIFAR-10:
+
+```bash
 python3 python/prepare_cifar10.py
+```
+
+Start training:
+
+```bash
 python3 python/train_split.py
 ```
 
-`prepare_cifar10.py` downloads and extracts the CIFAR-10 Python archive into `data/cifar-10-batches-py/`. The first training run builds on the shared object produced at `cpp/libminimal_cuda_cnn.so`.
+`prepare_cifar10.py` downloads and extracts the CIFAR-10 Python archive into `data/cifar-10-batches-py/`.
 
 ## Current CIFAR-10 Experiment
 

@@ -18,15 +18,34 @@ CIFAR-10 資料集檔案、編譯後的 `.so`、`__pycache__` 與訓練 checkpoi
 
 在已安裝 CUDA、`nvcc`、Python 與 NumPy 的環境中：
 
+複製 repository：
+
 ```bash
 git clone https://github.com/s9213712/minimal_cuda_cnn.git
 cd minimal_cuda_cnn
-make -C cpp
+```
+
+編譯 CUDA shared library：
+
+```bash
+make -C cpp check
+```
+
+這會產生 `cpp/libminimal_cuda_cnn.so`，並檢查必要的 C API symbol 是否正確匯出。預設使用 `USE_CUBLAS=1`；若要編譯不連結 cuBLAS 的手寫 fallback 路徑，可使用 `make -C cpp check USE_CUBLAS=0`。
+
+準備 CIFAR-10：
+
+```bash
 python3 python/prepare_cifar10.py
+```
+
+開始訓練：
+
+```bash
 python3 python/train_split.py
 ```
 
-`prepare_cifar10.py` 會下載並解壓 CIFAR-10 Python archive 到 `data/cifar-10-batches-py/`。第一次訓練會使用 `make -C cpp` 產生的 `cpp/libminimal_cuda_cnn.so`。
+`prepare_cifar10.py` 會下載並解壓 CIFAR-10 Python archive 到 `data/cifar-10-batches-py/`。
 
 ## 目前 CIFAR-10 實驗
 
