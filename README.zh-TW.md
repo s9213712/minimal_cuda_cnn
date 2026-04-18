@@ -14,6 +14,20 @@ Minimal CUDA CNN 是一個實驗性的 CUDA/C++ 與 Python 專案，用來訓練
 
 CIFAR-10 資料集檔案、編譯後的 `.so`、`__pycache__` 與訓練 checkpoint 都是本機檔案，已透過 Git ignore 排除。
 
+## 快速開始
+
+在已安裝 CUDA、`nvcc`、Python 與 NumPy 的環境中：
+
+```bash
+git clone https://github.com/s9213712/minimal_cuda_cnn.git
+cd minimal_cuda_cnn
+make -C cpp
+python3 python/prepare_cifar10.py
+python3 python/train_split.py
+```
+
+`prepare_cifar10.py` 會下載並解壓 CIFAR-10 Python archive 到 `data/cifar-10-batches-py/`。第一次訓練會使用 `make -C cpp` 產生的 `cpp/libminimal_cuda_cnn.so`。
+
 ## 目前 CIFAR-10 實驗
 
 手寫 CUDA trainer 和 PyTorch baseline 使用相同比較條件：

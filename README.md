@@ -14,6 +14,20 @@ The repository contains:
 
 CIFAR-10 dataset files, compiled `.so` files, `__pycache__`, and training checkpoints are local-only and ignored by Git.
 
+## Quick Start
+
+From a clean machine with CUDA, `nvcc`, Python, and NumPy available:
+
+```bash
+git clone https://github.com/s9213712/minimal_cuda_cnn.git
+cd minimal_cuda_cnn
+make -C cpp
+python3 python/prepare_cifar10.py
+python3 python/train_split.py
+```
+
+`prepare_cifar10.py` downloads and extracts the CIFAR-10 Python archive into `data/cifar-10-batches-py/`. The first training run builds on the shared object produced at `cpp/libminimal_cuda_cnn.so`.
+
 ## Current CIFAR-10 Experiment
 
 Both the handwritten CUDA trainer and the PyTorch baseline use the same comparison conditions:
