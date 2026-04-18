@@ -80,13 +80,25 @@ grad_input:   dL/dInput
 
 ```c
 void apply_sgd_update(float* weights, float* grad, float lr, int size);
+
+void apply_momentum_update(float* weights, float* grad, float* velocity,
+                           float lr, float momentum, int size);
 ```
 
-行為：
+`apply_sgd_update` 行為：
 
 ```text
 weights[i] -= lr * grad[i]
 ```
+
+`apply_momentum_update` 行為：
+
+```text
+velocity[i] = momentum * velocity[i] - lr * grad[i]
+weights[i] += velocity[i]
+```
+
+`velocity` 必須是和 `weights` 相同長度的 GPU buffer，訓練開始前初始化為 0，並在整個訓練期間保留。
 
 ## Layout 轉換
 
@@ -112,4 +124,3 @@ float softmax_cross_entropy(float* input, float* labels, float* probs, float* lo
 ```
 
 `labels` 是 one-hot label。此函式會計算 softmax 與 loss，不會修改 label buffer。若 `loss` 非 null，會把 scalar loss 寫到 device pointer。
-

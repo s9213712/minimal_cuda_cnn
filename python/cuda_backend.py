@@ -25,6 +25,7 @@ lib.leaky_relu_forward.argtypes = [c_void_p, c_float, c_int]
 lib.leaky_relu_backward.argtypes = [c_void_p, c_void_p, c_float, c_int]
 lib.dense_forward.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int]
 lib.apply_sgd_update.argtypes = [c_void_p, c_void_p, c_float, c_int]
+lib.apply_momentum_update.argtypes = [c_void_p, c_void_p, c_void_p, c_float, c_float, c_int]
 lib.nchw_to_cnhw.argtypes = [c_void_p, c_void_p, c_int, c_int, c_int, c_int]
 lib.cnhw_to_nchw.argtypes = [c_void_p, c_void_p, c_int, c_int, c_int, c_int]
 lib.maxpool_forward_store.argtypes = [c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int]
@@ -87,7 +88,7 @@ def maxpool_forward(d_input_cnhw, n, c, h, w):
     return d_pool, d_idx, out_h, out_w
 
 
-def update_conv(d_weight, d_grad, lr, size, name, weight_decay, clip_value, log_grad=False):
+def update_conv(d_weight, d_grad, d_velocity, lr, momentum, size, name, weight_decay, clip_value, log_grad=False):
     h_grad = g2h(d_grad, size).reshape(-1)
     h_weight = g2h(d_weight, size).reshape(-1)
     h_grad = h_grad + weight_decay * h_weight
@@ -95,4 +96,4 @@ def update_conv(d_weight, d_grad, lr, size, name, weight_decay, clip_value, log_
         print(f"    {name} grad_abs_mean={np.mean(np.abs(h_grad)):.6e} grad_abs_max={np.max(np.abs(h_grad)):.6e}")
     h_grad_clip = np.clip(h_grad, -clip_value, clip_value).astype(np.float32)
     lib.gpu_memcpy_h2d(d_grad, h_grad_clip.ctypes.data, size * 4)
-    lib.apply_sgd_update(d_weight, d_grad, c_float(lr), size)
+    lib.apply_momentum_update(d_weight, d_grad, d_velocity, c_float(lr), c_float(momentum), size)

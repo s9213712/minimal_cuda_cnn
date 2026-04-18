@@ -28,7 +28,9 @@ Both the handwritten CUDA trainer and the PyTorch baseline use the same comparis
 - Early stopping patience: `8`
 - Architecture: valid 3x3 conv stack, no padding
 - Activation: LeakyReLU with alpha `0.1`
-- Optimizer behavior: manual SGD-style updates, weight decay, gradient clipping, and LR plateau reduction
+- Optimizer behavior: manual Momentum SGD updates, weight decay, gradient clipping, and LR plateau reduction
+- Initial learning rates: `0.002` for conv1, other conv layers, and FC
+- Momentum: `0.9`
 
 Architecture:
 
@@ -150,12 +152,12 @@ python/best_model_split_torch.pt
 
 That checkpoint is ignored by Git.
 
-Baseline result from the current run on 2026-04-18:
+Momentum baseline result from the current run on 2026-04-18:
 
 ```text
-Best validation accuracy: 57.31% at epoch 40
-Official test accuracy:   57.34%
-Early stopping:           epoch 48
+Best validation accuracy: 63.26% at epoch 25
+Official test accuracy:   62.16%
+Early stopping:           epoch 33
 Device used:              CPU
 ```
 

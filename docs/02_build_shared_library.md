@@ -64,7 +64,20 @@ maxpool_forward_store, maxpool_backward_use_idx
 nchw_to_cnhw, cnhw_to_nchw
 leaky_relu_forward, leaky_relu_backward
 softmax_forward, softmax_cross_entropy, softmax_backward
+apply_sgd_update, apply_momentum_update
+```
+
+若更新了 `optimizer.cu`，重編後可以只檢查 optimizer symbol：
+
+```bash
+nm -D cpp/libminimal_cuda_cnn.so | grep apply_
+```
+
+預期至少看到：
+
+```text
 apply_sgd_update
+apply_momentum_update
 ```
 
 ## 清理與重編
@@ -81,4 +94,3 @@ cuda-memcheck python3 -u your_script.py
 ```
 
 目前 `compute-sanitizer` 在部分 WSL/WDDM 環境可能會因 debugger interface 不支援而不能用；此環境下 `cuda-memcheck` 可正常檢查。
-

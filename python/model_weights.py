@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from cuda_backend import g2h, lib, upload
+from cuda_backend import g2h, gpu_zeros, lib, upload
 from train_config import C1_IN, C1_OUT, C2_IN, C2_OUT, C3_IN, C3_OUT, C4_IN, C4_OUT, FC_IN, KH, KW
 
 
@@ -14,6 +14,17 @@ def upload_weights(w_conv1, w_conv2, w_conv3, w_conv4, fc_w, fc_b):
         upload(w_conv4),
         upload(fc_w),
         upload(fc_b),
+    )
+
+
+def init_velocity_buffers():
+    return (
+        gpu_zeros(C1_OUT * C1_IN * KH * KW),
+        gpu_zeros(C2_OUT * C2_IN * KH * KW),
+        gpu_zeros(C3_OUT * C3_IN * KH * KW),
+        gpu_zeros(C4_OUT * C4_IN * KH * KW),
+        gpu_zeros(10 * FC_IN),
+        gpu_zeros(10),
     )
 
 

@@ -11,5 +11,4 @@
 5. [05_cpp_linking.md](05_cpp_linking.md)：C++ 如何連結 `.so`，以及最小 inference 範例。
 6. [06_layout_and_debug.md](06_layout_and_debug.md)：NCHW/CNHW layout 規則、常見錯誤、`cuda-memcheck` 驗證流程。
 
-目前專案中的完整 CIFAR-10 訓練腳本位於 [train_split.py](/home/s92137/NN/minimal_cuda_cnn/python/train_split.py)，也使用同一個 `.so`。
-
+目前專案中的完整 CIFAR-10 訓練腳本位於 [train_split.py](/home/s92137/NN/minimal_cuda_cnn/python/train_split.py)，也使用同一個 `.so`。PyTorch 對照 baseline 位於 [train_split_torch_baseline.py](/home/s92137/NN/minimal_cuda_cnn/python/train_split_torch_baseline.py)，兩者共用 `train_config.py`、`cifar10_data.py` 與 `model_init.py` 來維持相同資料切分、初始權重與 Momentum SGD 條件。

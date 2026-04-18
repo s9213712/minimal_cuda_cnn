@@ -31,6 +31,7 @@ lib.leaky_relu_backward.argtypes = [c_void_p, c_void_p, c_float, c_int]
 lib.dense_forward.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int]
 lib.dense_backward_full.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int]
 lib.apply_sgd_update.argtypes = [c_void_p, c_void_p, c_float, c_int]
+lib.apply_momentum_update.argtypes = [c_void_p, c_void_p, c_void_p, c_float, c_float, c_int]
 ```
 
 ## Host/device helper
@@ -115,8 +116,21 @@ nchw_to_cnhw
 maxpool_backward_use_idx
 leaky_relu_backward
 conv_backward
-apply_sgd_update
+apply_momentum_update
 ```
+
+Momentum SGD 需要為每個 trainable buffer 準備同長度的 velocity buffer，訓練開始前設為 0，整個訓練期間保留：
+
+```python
+MOMENTUM = 0.9
+d_v_conv = zeros(OUT_C * C_IN * KH * KW)
+d_v_fc = zeros(10 * FC_IN)
+d_v_bias = zeros(10)
+
+lib.apply_momentum_update(d_w_conv, d_grad_conv, d_v_conv, c_float(lr), c_float(MOMENTUM), OUT_C * C_IN * KH * KW)
+```
+
+若只想做最小化測試，也可以繼續使用 `apply_sgd_update`；目前 CIFAR-10 trainer 預設使用 Momentum SGD。
 
 ## 完整範例檔
 

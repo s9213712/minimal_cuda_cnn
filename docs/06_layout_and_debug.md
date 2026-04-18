@@ -87,6 +87,12 @@ python3 -u /tmp/so_function_check.py
 cuda-memcheck python3 -u /tmp/so_function_check.py
 ```
 
+如果改到 optimizer，確認 `.so` 有匯出 Momentum update：
+
+```bash
+nm -D cpp/libminimal_cuda_cnn.so | grep apply_momentum_update
+```
+
 若要確認 CIFAR-10 訓練腳本能啟動：
 
 ```bash
@@ -127,4 +133,4 @@ cuda-memcheck python3 -u your_script.py
 2. 加 Conv + ReLU，不加 Pool。
 3. 再加 Pool。
 4. 每一步都檢查 gradient scale。`conv_backward` 的 weight gradient 會累加 batch，若 learning rate 太大，可能需要除以 batch 或降低 LR。
-
+5. 使用 Momentum SGD 時，velocity buffer 不能每個 batch 重設；它必須從訓練開始保留到訓練結束。

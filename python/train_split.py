@@ -26,7 +26,7 @@ from cuda_backend import (
 )
 from model_forward import evaluate
 from model_init import init_weights
-from model_weights import free_weights, reload_weights_from_checkpoint, save_checkpoint, upload_weights
+from model_weights import free_weights, init_velocity_buffers, reload_weights_from_checkpoint, save_checkpoint, upload_weights
 from train_config import (
     BATCH,
     BEST_MODEL_FILENAME,
@@ -64,6 +64,7 @@ from train_config import (
     LR_REDUCE_FACTOR,
     MIN_DELTA,
     MIN_LR,
+    MOMENTUM,
     N_TRAIN,
     N_VAL,
     P1H,
@@ -88,6 +89,10 @@ def current_device_weights():
     return d_w_conv1, d_w_conv2, d_w_conv3, d_w_conv4, d_fc_w, d_fc_b
 
 
+def current_velocity_buffers():
+    return d_v_conv1, d_v_conv2, d_v_conv3, d_v_conv4, d_v_fc_w, d_v_fc_b
+
+
 data_root = os.path.join(ROOT, "data", "cifar-10-batches-py")
 x_train, y_train, x_val, y_val, x_test_final, y_test_final = load_cifar10(
     data_root,
@@ -105,6 +110,7 @@ w_conv1, w_conv2, w_conv3, w_conv4, fc_w, fc_b = init_weights(INIT_SEED)
 d_w_conv1, d_w_conv2, d_w_conv3, d_w_conv4, d_fc_w, d_fc_b = upload_weights(
     w_conv1, w_conv2, w_conv3, w_conv4, fc_w, fc_b
 )
+d_v_conv1, d_v_conv2, d_v_conv3, d_v_conv4, d_v_fc_w, d_v_fc_b = init_velocity_buffers()
 
 print(
     "Arch: Conv1(3->32)->Conv2(32->32)->Pool1"
@@ -116,7 +122,7 @@ print(
 )
 print(
     f"LR_conv1={LR_CONV1}, LR_conv={LR_CONV}, LR_fc={LR_FC}, "
-    f"weight_decay={WEIGHT_DECAY}, BATCH={BATCH}, EPOCHS={EPOCHS}"
+    f"momentum={MOMENTUM}, weight_decay={WEIGHT_DECAY}, BATCH={BATCH}, EPOCHS={EPOCHS}"
 )
 print()
 
@@ -192,9 +198,9 @@ for epoch in range(EPOCHS):
         grad_fc_b = np.clip(grad_fc_b, -GRAD_CLIP_BIAS, GRAD_CLIP_BIAS).astype(np.float32)
 
         d_fc_grad_w = upload(grad_fc_w)
-        lib.apply_sgd_update(d_fc_w, d_fc_grad_w, c_float(current_lr_fc), 10 * FC_IN)
+        lib.apply_momentum_update(d_fc_w, d_fc_grad_w, d_v_fc_w, c_float(current_lr_fc), c_float(MOMENTUM), 10 * FC_IN)
         d_fc_grad_b = upload(grad_fc_b)
-        lib.apply_sgd_update(d_fc_b, d_fc_grad_b, c_float(current_lr_fc), 10)
+        lib.apply_momentum_update(d_fc_b, d_fc_grad_b, d_v_fc_b, c_float(current_lr_fc), c_float(MOMENTUM), 10)
         lib.gpu_free(d_fc_grad_w)
         lib.gpu_free(d_fc_grad_b)
         fc_w = g2h(d_fc_w, 10 * FC_IN).astype(np.float32)
@@ -217,7 +223,7 @@ for epoch in range(EPOCHS):
             BATCH, C4_IN, H3, W3, KH, KW, H4, W4, C4_OUT,
         )
         update_conv(
-            d_w_conv4, d_w_conv4_grad, current_lr_conv, C4_OUT * C4_IN * KH * KW,
+            d_w_conv4, d_w_conv4_grad, d_v_conv4, current_lr_conv, MOMENTUM, C4_OUT * C4_IN * KH * KW,
             "conv4", WEIGHT_DECAY, GRAD_CLIP_CONV, log_grad,
         )
 
@@ -231,7 +237,7 @@ for epoch in range(EPOCHS):
             BATCH, C3_IN, P1H, P1W, KH, KW, H3, W3, C3_OUT,
         )
         update_conv(
-            d_w_conv3, d_w_conv3_grad, current_lr_conv, C3_OUT * C3_IN * KH * KW,
+            d_w_conv3, d_w_conv3_grad, d_v_conv3, current_lr_conv, MOMENTUM, C3_OUT * C3_IN * KH * KW,
             "conv3", WEIGHT_DECAY, GRAD_CLIP_CONV, log_grad,
         )
 
@@ -247,7 +253,7 @@ for epoch in range(EPOCHS):
             BATCH, C2_IN, H1, W1, KH, KW, H2, W2, C2_OUT,
         )
         update_conv(
-            d_w_conv2, d_w_conv2_grad, current_lr_conv, C2_OUT * C2_IN * KH * KW,
+            d_w_conv2, d_w_conv2_grad, d_v_conv2, current_lr_conv, MOMENTUM, C2_OUT * C2_IN * KH * KW,
             "conv2", WEIGHT_DECAY, GRAD_CLIP_CONV, log_grad,
         )
 
@@ -261,7 +267,7 @@ for epoch in range(EPOCHS):
             BATCH, C1_IN, H, W, KH, KW, H1, W1, C1_OUT,
         )
         update_conv(
-            d_w_conv1, d_w_conv1_grad, current_lr_conv1, C1_OUT * C1_IN * KH * KW,
+            d_w_conv1, d_w_conv1_grad, d_v_conv1, current_lr_conv1, MOMENTUM, C1_OUT * C1_IN * KH * KW,
             "conv1", WEIGHT_DECAY, GRAD_CLIP_CONV, log_grad,
         )
 
@@ -333,6 +339,7 @@ for epoch in range(EPOCHS):
         break
 
 print("\n=== FINAL EVALUATION ON OFFICIAL TEST SET ===")
+free_weights(current_velocity_buffers())
 if os.path.exists(BEST_MODEL_PATH):
     best_ckpt, fc_w, fc_b, new_device_weights = reload_weights_from_checkpoint(
         BEST_MODEL_PATH,

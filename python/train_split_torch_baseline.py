@@ -44,6 +44,7 @@ from train_config import (
     LR_REDUCE_FACTOR,
     MIN_DELTA,
     MIN_LR,
+    MOMENTUM,
     N_TRAIN,
     N_VAL,
     P1H,
@@ -98,7 +99,18 @@ def load_initial_weights(model, device):
         model.fc.bias.copy_(torch.from_numpy(fc_b).to(device))
 
 
-def apply_sgd_update(model, lr_conv1, lr_conv, lr_fc):
+def init_velocity_buffers(model):
+    return {
+        model.conv1.weight: torch.zeros_like(model.conv1.weight),
+        model.conv2.weight: torch.zeros_like(model.conv2.weight),
+        model.conv3.weight: torch.zeros_like(model.conv3.weight),
+        model.conv4.weight: torch.zeros_like(model.conv4.weight),
+        model.fc.weight: torch.zeros_like(model.fc.weight),
+        model.fc.bias: torch.zeros_like(model.fc.bias),
+    }
+
+
+def apply_momentum_update(model, velocity, lr_conv1, lr_conv, lr_fc):
     updates = [
         (model.conv1.weight, lr_conv1, GRAD_CLIP_CONV, True),
         (model.conv2.weight, lr_conv, GRAD_CLIP_CONV, True),
@@ -113,7 +125,8 @@ def apply_sgd_update(model, lr_conv1, lr_conv, lr_fc):
             if use_decay:
                 grad = grad + WEIGHT_DECAY * param
             grad = torch.clamp(grad, -clip_value, clip_value)
-            param -= lr * grad
+            velocity[param].mul_(MOMENTUM).add_(grad, alpha=-lr)
+            param += velocity[param]
             param.grad = None
 
 
@@ -155,6 +168,7 @@ def main():
 
     model = TorchCifarCnn().to(device)
     load_initial_weights(model, device)
+    velocity = init_velocity_buffers(model)
     criterion = nn.CrossEntropyLoss()
 
     nbatches = x_train.shape[0] // BATCH
@@ -178,7 +192,7 @@ def main():
     )
     print(
         f"LR_conv1={LR_CONV1}, LR_conv={LR_CONV}, LR_fc={LR_FC}, "
-        f"weight_decay={WEIGHT_DECAY}, BATCH={BATCH}, EPOCHS={EPOCHS}"
+        f"momentum={MOMENTUM}, weight_decay={WEIGHT_DECAY}, BATCH={BATCH}, EPOCHS={EPOCHS}"
     )
     print(f"DATASET_SEED={DATASET_SEED}, INIT_SEED={INIT_SEED}")
     print()
@@ -204,7 +218,7 @@ def main():
             logits = model(xb, clamp_pool_grad=True)
             loss = criterion(logits, yb)
             loss.backward()
-            apply_sgd_update(model, current_lr_conv1, current_lr_conv, current_lr_fc)
+            apply_momentum_update(model, velocity, current_lr_conv1, current_lr_conv, current_lr_fc)
 
             total_loss += float(loss.detach().cpu().item())
             pred = torch.argmax(logits.detach(), dim=1)

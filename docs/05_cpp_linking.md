@@ -100,8 +100,24 @@ g++ examples/mnist_infer_demo.cpp \
 3. Forward：`im2col_forward -> gemm_forward -> activation -> maxpool_forward_store -> layout convert -> dense_forward`。
 4. 在 host 或 device 計算 loss gradient。若在 host 計算，將 logits copy 回 CPU，做 softmax/cross entropy，再 upload gradient。
 5. Backward：`dense_backward_full -> layout convert -> maxpool_backward_use_idx -> activation backward -> conv_backward`。
-6. Update：`apply_sgd_update` 更新 weights/bias。
+6. Update：建議用 `apply_momentum_update` 更新 weights/bias；每個 trainable buffer 需要一個同長度 velocity buffer，訓練開始前清為 0 並跨 batch 保留。若只做最小測試，可用 `apply_sgd_update`。
 7. 每個 batch 結束後釋放暫存 buffer。
+
+Momentum update 的 C ABI prototype：
+
+```cpp
+extern "C" {
+void apply_momentum_update(float* weights, float* grad, float* velocity,
+                           float lr, float momentum, int size);
+}
+```
+
+更新公式：
+
+```text
+velocity[i] = momentum * velocity[i] - lr * grad[i]
+weights[i] += velocity[i]
+```
 
 ## 注意事項
 
@@ -116,4 +132,3 @@ export LD_LIBRARY_PATH=/home/s92137/NN/minimal_cuda_cnn/cpp:$LD_LIBRARY_PATH
 
 # 方式 3：把 .so 放到系統 linker 搜尋路徑
 ```
-
