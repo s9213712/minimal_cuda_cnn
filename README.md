@@ -12,7 +12,7 @@ The repository contains:
 - a matched PyTorch baseline for comparison
 - documentation for compiling and calling the shared object
 
-CIFAR-10 batch files, compiled `.so` files, `__pycache__`, and training checkpoints are local-only and ignored by Git.
+CIFAR-10 dataset files, compiled `.so` files, `__pycache__`, and training checkpoints are local-only and ignored by Git.
 
 ## Current CIFAR-10 Experiment
 
@@ -60,7 +60,8 @@ python/
   train_split.py                 handwritten CUDA CIFAR-10 trainer
   train_split_torch_baseline.py  matched PyTorch baseline
   train_config.py                shared training/model constants
-  cifar10_data.py                CIFAR-10 loading, split, normalization
+  cifar10_data.py                CIFAR-10 preparation, loading, split, normalization
+  prepare_cifar10.py             standalone dataset preparation command
   model_init.py                  shared host-side initial weights
   cuda_backend.py                ctypes bindings and GPU helper functions
   model_forward.py               CUDA inference/evaluation helper

@@ -7,7 +7,7 @@
 在專案根目錄執行：
 
 ```bash
-cd /home/s92137/NN/minimal_cuda_cnn
+cd minimal_cuda_cnn
 make -C cpp
 ```
 
@@ -57,7 +57,7 @@ leaky_relu.cu, layer_norm.cu, maxpool_store.cu,
 maxpool_backward_use_idx.cu, layout_convert.cu
 ```
 
-`batch_norm.cu`、`alexnet.cu`、`resnet_backward.cu` 目前是保留的實驗/擴充檔案；若要匯出其中函式，需先加入 `cpp/Makefile` 的 nvcc 編譯命令。
+若新增 `.cu` 檔並希望匯出其中函式，需先加入 `cpp/Makefile` 的 `SRCS` 編譯清單。
 
 ## GPU 架構參數
 

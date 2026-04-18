@@ -88,10 +88,10 @@ int main() {
 編譯：
 
 ```bash
-cd /home/s92137/NN/minimal_cuda_cnn
+cd minimal_cuda_cnn
 g++ examples/mnist_infer_demo.cpp \
   -Lcpp -lminimal_cuda_cnn \
-  -Wl,-rpath,/home/s92137/NN/minimal_cuda_cnn/cpp \
+  -Wl,-rpath,'$ORIGIN/../cpp' \
   -o examples/mnist_infer_demo
 ```
 
@@ -108,7 +108,7 @@ g++ examples/mnist_infer_demo.cpp \
 1. 準備 NCHW float32 input，例如 MNIST 為 `(N, 1, 28, 28)`。
 2. 用 `gpu_malloc` 配置 input、weights、bias、intermediate buffer。固定 shape 的 batch buffer 建議在訓練開始前配置一次，跨 batch 重用。
 3. Forward：`im2col_forward -> gemm_forward -> activation -> maxpool_forward_store -> layout convert -> dense_forward`。
-4. 在 host 或 device 計算 loss gradient。若在 host 計算，將 logits copy 回 CPU，做 softmax/cross entropy，再 upload gradient。
+4. Loss：建議用 `softmax_xent_grad_loss_acc` 在 GPU 端產生 logits gradient、loss sum 與 correct count，避免每個 batch 把 logits copy 回 CPU。
 5. Backward：`dense_backward_full -> layout convert -> maxpool_backward_use_idx -> activation backward -> conv_backward_precol`。若 forward 的 col buffer 沒有保留，可退回使用 `conv_backward`。
 6. Update：目前建議用 `conv_update_fused` 更新 weights/bias，讓 weight decay、gradient clipping、Momentum update 都留在 GPU。每個 trainable buffer 需要一個同長度 velocity buffer，訓練開始前清為 0 並跨 batch 保留。若只做最小測試，可用 `apply_sgd_update` 或 `apply_momentum_update`。
 7. 訓練結束後釋放 workspace、weights、velocity；不要每個 batch 反覆釋放固定 shape 的暫存 buffer。
@@ -150,10 +150,10 @@ Bias update 可把 `weight_decay` 設為 `0.0`。
 
 ```bash
 # 方式 1：編譯時寫 rpath
--Wl,-rpath,/home/s92137/NN/minimal_cuda_cnn/cpp
+-Wl,-rpath,'$ORIGIN/../cpp'
 
 # 方式 2：執行前設定 LD_LIBRARY_PATH
-export LD_LIBRARY_PATH=/home/s92137/NN/minimal_cuda_cnn/cpp:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH="$PWD/cpp:${LD_LIBRARY_PATH:-}"
 
 # 方式 3：把 .so 放到系統 linker 搜尋路徑
 ```

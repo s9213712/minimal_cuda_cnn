@@ -10,7 +10,7 @@ import os
 import numpy as np
 from ctypes import c_float, c_int, c_void_p
 
-ROOT = "/home/s92137/NN/minimal_cuda_cnn"
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 lib = ctypes.CDLL(os.path.join(ROOT, "cpp", "libminimal_cuda_cnn.so"))
 
 lib.gpu_malloc.argtypes = [ctypes.c_size_t]
@@ -163,7 +163,7 @@ docs/train_mnist_so.py
 執行：
 
 ```bash
-cd /home/s92137/NN/minimal_cuda_cnn
+cd minimal_cuda_cnn
 make -C cpp
 python3 -u docs/train_mnist_so.py --download
 ```

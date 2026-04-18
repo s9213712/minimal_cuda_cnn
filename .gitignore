@@ -6,12 +6,13 @@ __pycache__/
 *.so
 *.o
 
-# Large local CIFAR-10 batches
-data/cifar-10-batches-py/data_batch_*
-data/cifar-10-batches-py/test_batch
+# Local CIFAR-10 dataset files
+data/cifar-10-batches-py/
+data/cifar-10-python.tar.gz
 
 # Local analysis notes
 bug.txt
+comments/
 
 # Training checkpoints
 python/best_model_split.npz

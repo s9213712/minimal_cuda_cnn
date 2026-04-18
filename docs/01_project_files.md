@@ -10,7 +10,6 @@ minimal_cuda_cnn/
 │   ├── Makefile
 │   ├── include/
 │   │   ├── cuda_check.h
-│   │   ├── dataloader.h
 │   │   ├── dense_layer.h
 │   │   ├── network.h
 │   │   └── tensor.h
@@ -31,12 +30,15 @@ minimal_cuda_cnn/
 │   ├── train_split_torch_baseline.py
 │   ├── train_config.py
 │   ├── cifar10_data.py
+│   ├── prepare_cifar10.py
 │   ├── cuda_backend.py
 │   ├── model_forward.py
 │   ├── model_init.py
 │   └── model_weights.py
 └── docs/
 ```
+
+`data/cifar-10-batches-py/`、`cpp/libminimal_cuda_cnn.so`、checkpoint、`__pycache__/` 與 `comments/` 都是本機檔案，不屬於 Git 版本內容。`comments/` 保留給本機開發建議與實驗記錄，不會上傳。
 
 ## include
 
@@ -46,7 +48,6 @@ minimal_cuda_cnn/
 | `tensor.h` | `CudaTensor` C++ RAII 包裝，管理 GPU tensor 記憶體，提供 host/device copy。 |
 | `network.h` | C++ layer 介面與 `ConvLayer`、`ReLULayer`、`MaxPoolLayer` 宣告。 |
 | `dense_layer.h` | C++ `DenseLayer` 宣告。 |
-| `dataloader.h` | 簡單 C++ dataloader 骨架，目前不是 Python 訓練主流程必需。 |
 
 ## src
 
@@ -66,9 +67,7 @@ minimal_cuda_cnn/
 | `maxpool_backward_nchw.cu` | NCHW maxpool backward 版本。 |
 | `leaky_relu.cu` | LeakyReLU forward/backward，含 CNHW 與 NCHW 命名版本。 |
 | `layer_norm.cu` | LayerNorm forward/backward。 |
-| `batch_norm.cu` | BatchNorm forward/backward。注意：目前預設 Makefile 沒有把它編進 `.so`，若要使用需加入 `cpp/Makefile` 的編譯清單。 |
 | `network.cu` | C++ layer 類別的 forward 實作，供 C++ 端使用。 |
-| `alexnet.cu`、`resnet_backward.cu` | 實驗性網路/ResNet backward 程式碼，不是目前 CIFAR/MNIST 主流程必需，也未在預設 Makefile 編進 `.so`。 |
 | `gpu_monitor.cu` | `check_gpu_status()`，呼叫 `nvidia-smi` 印出 GPU 使用率。 |
 
 ## python
