@@ -12,3 +12,6 @@ data/cifar-10-batches-py/test_batch
 
 # Local analysis notes
 bug.txt
+
+# Training checkpoints
+python/best_model_split.npz

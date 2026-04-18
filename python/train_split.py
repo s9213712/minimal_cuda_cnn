@@ -40,13 +40,26 @@ lib.conv_backward.argtypes = [
 ]
 
 BATCH = 64
-EPOCHS = 20
-LR_CONV1 = 0.001
-LR_CONV = 0.005
-LR_FC = 0.005
+EPOCHS = 50
+LR_CONV1 = 0.003
+LR_CONV = 0.003
+LR_FC = 0.003
 LEAKY_ALPHA = 0.1
 GRAD_DEBUG = os.environ.get("GRAD_DEBUG") == "1"
 GRAD_DEBUG_BATCHES = int(os.environ.get("GRAD_DEBUG_BATCHES", "1"))
+WEIGHT_DECAY = 5e-4
+GRAD_CLIP_CONV = 1.0
+GRAD_CLIP_FC = 1.0
+GRAD_CLIP_BIAS = 5.0
+LR_PLATEAU_PATIENCE = 3
+LR_REDUCE_FACTOR = 0.5
+MIN_LR = 1e-5
+EARLY_STOP_PATIENCE = 8
+MIN_DELTA = 0.05
+BEST_MODEL_PATH = os.path.join(ROOT, "python", "best_model_split.npz")
+
+CIFAR_MEAN = np.array([0.4914, 0.4822, 0.4465], dtype=np.float32).reshape(1, 3, 1, 1)
+CIFAR_STD = np.array([0.2470, 0.2435, 0.2616], dtype=np.float32).reshape(1, 3, 1, 1)
 
 C1_IN, C1_OUT = 3, 32
 C2_IN, C2_OUT = 32, 32
@@ -68,6 +81,10 @@ def g2h(ptr, size):
     h = np.zeros(size, dtype=np.float32)
     lib.gpu_memcpy_d2h(h.ctypes.data, ptr, size * 4)
     return h
+
+
+def normalize_cifar(x):
+    return ((x - CIFAR_MEAN) / CIFAR_STD).astype(np.float32)
 
 
 def gpu_zeros(size):
@@ -116,13 +133,51 @@ def maxpool_forward(d_input_cnhw, n, c, h, w):
     return d_pool, d_idx, out_h, out_w
 
 
-def update_conv(d_weight, d_grad, lr, size, name, log_grad=False):
+def update_conv(d_weight, d_grad, lr, size, name, weight_decay, clip_value, log_grad=False):
     h_grad = g2h(d_grad, size).reshape(-1)
+    h_weight = g2h(d_weight, size).reshape(-1)
+    h_grad = h_grad + weight_decay * h_weight
     if log_grad:
         print(f"    {name} grad_abs_mean={np.mean(np.abs(h_grad)):.6e} grad_abs_max={np.max(np.abs(h_grad)):.6e}")
-    h_grad_clip = np.clip(h_grad, -1.0, 1.0).astype(np.float32)
+    h_grad_clip = np.clip(h_grad, -clip_value, clip_value).astype(np.float32)
     lib.gpu_memcpy_h2d(d_grad, h_grad_clip.ctypes.data, size * 4)
     lib.apply_sgd_update(d_weight, d_grad, c_float(lr), size)
+
+
+def save_checkpoint(path, epoch, val_acc, lr_conv1, lr_conv, lr_fc):
+    np.savez(
+        path,
+        epoch=np.int32(epoch),
+        val_acc=np.float32(val_acc),
+        lr_conv1=np.float32(lr_conv1),
+        lr_conv=np.float32(lr_conv),
+        lr_fc=np.float32(lr_fc),
+        w_conv1=g2h(d_w_conv1, C1_OUT * C1_IN * KH * KW),
+        w_conv2=g2h(d_w_conv2, C2_OUT * C2_IN * KH * KW),
+        w_conv3=g2h(d_w_conv3, C3_OUT * C3_IN * KH * KW),
+        w_conv4=g2h(d_w_conv4, C4_OUT * C4_IN * KH * KW),
+        fc_w=g2h(d_fc_w, 10 * FC_IN),
+        fc_b=g2h(d_fc_b, 10),
+    )
+
+
+def reload_weights_from_checkpoint(path):
+    global d_w_conv1, d_w_conv2, d_w_conv3, d_w_conv4, d_fc_w, d_fc_b
+    global fc_w, fc_b
+
+    ckpt = np.load(path)
+    for ptr in [d_w_conv1, d_w_conv2, d_w_conv3, d_w_conv4, d_fc_w, d_fc_b]:
+        lib.gpu_free(ptr)
+
+    fc_w = ckpt["fc_w"].astype(np.float32)
+    fc_b = ckpt["fc_b"].astype(np.float32)
+    d_w_conv1 = upload(ckpt["w_conv1"].astype(np.float32))
+    d_w_conv2 = upload(ckpt["w_conv2"].astype(np.float32))
+    d_w_conv3 = upload(ckpt["w_conv3"].astype(np.float32))
+    d_w_conv4 = upload(ckpt["w_conv4"].astype(np.float32))
+    d_fc_w = upload(fc_w)
+    d_fc_b = upload(fc_b)
+    return ckpt
 
 
 def load_cifar10():
@@ -169,6 +224,9 @@ def load_cifar10():
 
 
 x_train, y_train, x_val, y_val, x_test_final, y_test_final = load_cifar10()
+x_train = normalize_cifar(x_train)
+x_val = normalize_cifar(x_val)
+x_test_final = normalize_cifar(x_test_final)
 print(f"Train: {x_train.shape[0]}, Val: {x_val.shape[0]}, Test(official): {x_test_final.shape[0]}")
 
 np.random.seed(42)
@@ -199,7 +257,10 @@ print(
     f"Shapes: 32x32 -> {H1}x{W1} -> {H2}x{W2} -> {P1H}x{P1W}"
     f" -> {H3}x{W3} -> {H4}x{W4} -> {P2H}x{P2W}"
 )
-print(f"LR_conv1={LR_CONV1}, LR_conv={LR_CONV}, LR_fc={LR_FC}, BATCH={BATCH}, EPOCHS={EPOCHS}")
+print(
+    f"LR_conv1={LR_CONV1}, LR_conv={LR_CONV}, LR_fc={LR_FC}, "
+    f"weight_decay={WEIGHT_DECAY}, BATCH={BATCH}, EPOCHS={EPOCHS}"
+)
 print()
 
 
@@ -256,6 +317,13 @@ def evaluate(x, y, batch_size=BATCH, max_batches=50):
 
 
 NBATCHES = x_train.shape[0] // BATCH
+best_val_acc = -1.0
+best_epoch = -1
+epochs_no_improve = 0
+plateau_count = 0
+current_lr_conv1 = LR_CONV1
+current_lr_conv = LR_CONV
+current_lr_fc = LR_FC
 
 for epoch in range(EPOCHS):
     t0 = time.time()
@@ -314,10 +382,14 @@ for epoch in range(EPOCHS):
         grad_fc_b = d_logits.sum(axis=0)
         grad_pool2 = d_logits @ fc_w.reshape(10, FC_IN)
 
-        d_fc_grad_w = upload(np.clip(grad_fc_w, -1.0, 1.0).astype(np.float32))
-        lib.apply_sgd_update(d_fc_w, d_fc_grad_w, c_float(LR_FC), 10 * FC_IN)
-        d_fc_grad_b = upload(np.clip(grad_fc_b, -5.0, 5.0).astype(np.float32))
-        lib.apply_sgd_update(d_fc_b, d_fc_grad_b, c_float(LR_FC), 10)
+        grad_fc_w = grad_fc_w + WEIGHT_DECAY * fc_w.reshape(10, FC_IN)
+        grad_fc_w = np.clip(grad_fc_w, -GRAD_CLIP_FC, GRAD_CLIP_FC).astype(np.float32)
+        grad_fc_b = np.clip(grad_fc_b, -GRAD_CLIP_BIAS, GRAD_CLIP_BIAS).astype(np.float32)
+
+        d_fc_grad_w = upload(grad_fc_w)
+        lib.apply_sgd_update(d_fc_w, d_fc_grad_w, c_float(current_lr_fc), 10 * FC_IN)
+        d_fc_grad_b = upload(grad_fc_b)
+        lib.apply_sgd_update(d_fc_b, d_fc_grad_b, c_float(current_lr_fc), 10)
         lib.gpu_free(d_fc_grad_w)
         lib.gpu_free(d_fc_grad_b)
         fc_w = g2h(d_fc_w, 10 * FC_IN).astype(np.float32)
@@ -339,7 +411,10 @@ for epoch in range(EPOCHS):
             d_conv4_grad_raw, d_conv3_nchw, d_w_conv4, d_w_conv4_grad, d_conv3_grad,
             BATCH, C4_IN, H3, W3, KH, KW, H4, W4, C4_OUT,
         )
-        update_conv(d_w_conv4, d_w_conv4_grad, LR_CONV, C4_OUT * C4_IN * KH * KW, "conv4", log_grad)
+        update_conv(
+            d_w_conv4, d_w_conv4_grad, current_lr_conv, C4_OUT * C4_IN * KH * KW,
+            "conv4", WEIGHT_DECAY, GRAD_CLIP_CONV, log_grad,
+        )
 
         # Conv3 backward.
         d_conv3_grad_raw = nchw_to_cnhw_alloc(d_conv3_grad, BATCH, C3_OUT, H3, W3)
@@ -350,7 +425,10 @@ for epoch in range(EPOCHS):
             d_conv3_grad_raw, d_pool1_nchw, d_w_conv3, d_w_conv3_grad, d_pool1_grad,
             BATCH, C3_IN, P1H, P1W, KH, KW, H3, W3, C3_OUT,
         )
-        update_conv(d_w_conv3, d_w_conv3_grad, LR_CONV, C3_OUT * C3_IN * KH * KW, "conv3", log_grad)
+        update_conv(
+            d_w_conv3, d_w_conv3_grad, current_lr_conv, C3_OUT * C3_IN * KH * KW,
+            "conv3", WEIGHT_DECAY, GRAD_CLIP_CONV, log_grad,
+        )
 
         # Conv2 backward.
         d_pool1_grad_cnhw = nchw_to_cnhw_alloc(d_pool1_grad, BATCH, C2_OUT, P1H, P1W)
@@ -363,7 +441,10 @@ for epoch in range(EPOCHS):
             d_conv2_grad_raw, d_conv1_nchw, d_w_conv2, d_w_conv2_grad, d_conv1_grad,
             BATCH, C2_IN, H1, W1, KH, KW, H2, W2, C2_OUT,
         )
-        update_conv(d_w_conv2, d_w_conv2_grad, LR_CONV, C2_OUT * C2_IN * KH * KW, "conv2", log_grad)
+        update_conv(
+            d_w_conv2, d_w_conv2_grad, current_lr_conv, C2_OUT * C2_IN * KH * KW,
+            "conv2", WEIGHT_DECAY, GRAD_CLIP_CONV, log_grad,
+        )
 
         # Conv1 backward.
         d_conv1_grad_raw = nchw_to_cnhw_alloc(d_conv1_grad, BATCH, C1_OUT, H1, W1)
@@ -374,7 +455,10 @@ for epoch in range(EPOCHS):
             d_conv1_grad_raw, d_x, d_w_conv1, d_w_conv1_grad, d_x_grad,
             BATCH, C1_IN, H, W, KH, KW, H1, W1, C1_OUT,
         )
-        update_conv(d_w_conv1, d_w_conv1_grad, LR_CONV1, C1_OUT * C1_IN * KH * KW, "conv1", log_grad)
+        update_conv(
+            d_w_conv1, d_w_conv1_grad, current_lr_conv1, C1_OUT * C1_IN * KH * KW,
+            "conv1", WEIGHT_DECAY, GRAD_CLIP_CONV, log_grad,
+        )
 
         for ptr in [
             d_x, d_col1, d_conv1_raw, d_conv1_nchw,
@@ -394,9 +478,51 @@ for epoch in range(EPOCHS):
 
     train_acc = correct / NBATCHES / BATCH * 100
     val_acc = evaluate(x_val, y_val)
-    print(f"Epoch {epoch+1}/{EPOCHS}: Loss={total_loss/NBATCHES:.4f}, Train={train_acc:.2f}%, Val={val_acc:.2f}%, Time={time.time()-t0:.1f}s")
+    epoch_loss = total_loss / NBATCHES
+    elapsed = time.time() - t0
+    improved = val_acc > (best_val_acc + MIN_DELTA)
+
+    if improved:
+        best_val_acc = val_acc
+        best_epoch = epoch + 1
+        epochs_no_improve = 0
+        plateau_count = 0
+        save_checkpoint(BEST_MODEL_PATH, epoch + 1, val_acc, current_lr_conv1, current_lr_conv, current_lr_fc)
+        save_msg = " [saved best]"
+    else:
+        epochs_no_improve += 1
+        plateau_count += 1
+        save_msg = ""
+
+    if plateau_count >= LR_PLATEAU_PATIENCE:
+        new_lr_conv1 = max(current_lr_conv1 * LR_REDUCE_FACTOR, MIN_LR)
+        new_lr_conv = max(current_lr_conv * LR_REDUCE_FACTOR, MIN_LR)
+        new_lr_fc = max(current_lr_fc * LR_REDUCE_FACTOR, MIN_LR)
+        if (new_lr_conv1, new_lr_conv, new_lr_fc) != (current_lr_conv1, current_lr_conv, current_lr_fc):
+            current_lr_conv1 = new_lr_conv1
+            current_lr_conv = new_lr_conv
+            current_lr_fc = new_lr_fc
+            print(
+                f"  LR reduced -> conv1={current_lr_conv1:.6f}, "
+                f"conv={current_lr_conv:.6f}, fc={current_lr_fc:.6f}"
+            )
+        plateau_count = 0
+
+    print(
+        f"Epoch {epoch+1}/{EPOCHS}: Loss={epoch_loss:.4f}, Train={train_acc:.2f}%, Val={val_acc:.2f}%, "
+        f"BestVal={best_val_acc:.2f}% @ {best_epoch}, "
+        f"LRs=({current_lr_conv1:.6f}, {current_lr_conv:.6f}, {current_lr_fc:.6f}), "
+        f"Time={elapsed:.1f}s{save_msg}"
+    )
+
+    if epochs_no_improve >= EARLY_STOP_PATIENCE:
+        print(f"Early stopping after {epoch+1} epochs; best val {best_val_acc:.2f}% at epoch {best_epoch}.")
+        break
 
 print("\n=== FINAL EVALUATION ON OFFICIAL TEST SET ===")
+if os.path.exists(BEST_MODEL_PATH):
+    best_ckpt = reload_weights_from_checkpoint(BEST_MODEL_PATH)
+    print(f"Reloaded best checkpoint from epoch {int(best_ckpt['epoch'])} with Val={float(best_ckpt['val_acc']):.2f}%")
 test_acc = evaluate(x_test_final, y_test_final)
 print(f"Test Accuracy: {test_acc:.2f}%")
 
