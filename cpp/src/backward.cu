@@ -1,5 +1,6 @@
 #include <cuda_runtime.h>
 #include <cmath>
+#include "cuda_check.h"
 
 // ============== Activation Backward ==============
 __global__ void relu_backward_kernel(float* data, float* grad, int size) {
@@ -58,7 +59,7 @@ extern "C" {
     void apply_relu_backward(float* data, float* grad, int size) {
         int tpb = 256;
         relu_backward_kernel<<<(size + tpb - 1) / tpb, tpb>>>(data, grad, size);
-        cudaDeviceSynchronize();
+        CUDA_KERNEL_CHECK();
     }
     
     void maxpool_backward(float* d_grad_out, float* d_input, float* d_grad_input, int n, int c, int h, int w) {
@@ -67,6 +68,6 @@ extern "C" {
         int size = n * c * out_h * out_w;
         int tpb = 256;
         maxpool_backward_kernel<<<(size + tpb - 1) / tpb, tpb>>>(d_grad_out, d_input, d_grad_input, n, c, h, w);
-        cudaDeviceSynchronize();
+        CUDA_KERNEL_CHECK();
     }
 }

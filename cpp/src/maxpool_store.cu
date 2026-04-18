@@ -1,3 +1,5 @@
+#include "cuda_check.h"
+
 // MaxPool Forward with 2x2 stride - stores max indices
 // Input: (C, N, H, W) — CNHW layout
 // Output: (C, N, H/2, W/2) — CNHW layout  
@@ -49,5 +51,5 @@ extern "C" void maxpool_forward_store(float* d_output, float* d_input, int* d_ma
     int tpb = 256;
     // input and output are both CNHW layout
     maxpool_forward_store_kernel<<<(total + tpb - 1) / tpb, tpb>>>(d_input, d_output, d_max_idx, N, C, H, W);
-    cudaDeviceSynchronize();
+    CUDA_KERNEL_CHECK();
 }

@@ -1,3 +1,5 @@
+#include "cuda_check.h"
+
 // Layer Normalization: y = (x - mean) / sqrt(var + eps) * gamma + beta
 // Input: (N, C, H, W) -> normalize over (H*W)
 // Output: (N, C, H, W)
@@ -97,7 +99,7 @@ extern "C" void layer_norm_forward(float* d_output, float* d_input,
     int total = N * C * H * W;
     int tpb = 256;
     layer_norm_forward_kernel<<<(total + tpb - 1) / tpb, tpb>>>(d_output, d_input, d_gamma, d_beta, N, C, H, W, eps);
-    cudaDeviceSynchronize();
+    CUDA_KERNEL_CHECK();
 }
 
 extern "C" void layer_norm_backward(float* d_grad_input, float* d_grad_output,
@@ -106,5 +108,5 @@ extern "C" void layer_norm_backward(float* d_grad_input, float* d_grad_output,
     int total = N * C * H * W;
     int tpb = 256;
     layer_norm_backward_kernel<<<(total + tpb - 1) / tpb, tpb>>>(d_grad_input, d_grad_output, d_input, d_gamma, N, C, H, W, eps);
-    cudaDeviceSynchronize();
+    CUDA_KERNEL_CHECK();
 }

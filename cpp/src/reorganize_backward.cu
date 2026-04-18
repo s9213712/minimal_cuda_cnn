@@ -1,3 +1,5 @@
+#include "cuda_check.h"
+
 // Reverse reorganize: (N, OC, H, W) NCHW -> (OC, N, H, W) CNHW
 // Correct mathematical inverse: grad_input[c, n, h, w] = grad_output[n, c, h, w]
 // Each output element maps to exactly one input element (no accumulation needed)
@@ -22,5 +24,5 @@ extern "C" void reorganize_backward(float* d_grad_output, float* d_grad_input, i
     int total = N * C * H * W;
     int tpb = 256;
     reorganize_backward_kernel<<<(total + tpb - 1) / tpb, tpb>>>(d_grad_output, d_grad_input, N, C, H, W);
-    cudaDeviceSynchronize();
+    CUDA_KERNEL_CHECK();
 }

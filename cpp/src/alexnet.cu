@@ -1,5 +1,6 @@
 #include "network.h"
 #include "tensor.h"
+#include "cuda_check.h"
 #include <iostream>
 #include <vector>
 #include <cuda_runtime.h>
@@ -31,13 +32,13 @@ public:
         };
         for (auto& p : conv_params) {
             float* w;
-            cudaMalloc(&w, p.out_c * p.in_c * p.kh * p.kw * sizeof(float));
+            CUDA_CHECK(cudaMalloc(&w, p.out_c * p.in_c * p.kh * p.kw * sizeof(float)));
             weights.push_back(w);
         }
     }
 
     ~AlexNet() {
-        for (auto w : weights) cudaFree(w);
+        for (auto w : weights) CUDA_CHECK(cudaFree(w));
     }
 
     float* forward(float* d_input, int N, int C, int H, int W) {
@@ -50,9 +51,9 @@ public:
             int outW = curr_w - p.kw + 1;
             
             float* d_col;
-            cudaMalloc(&d_col, p.in_c * p.kh * p.kw * N * outH * outW * sizeof(float));
+            CUDA_CHECK(cudaMalloc(&d_col, p.in_c * p.kh * p.kw * N * outH * outW * sizeof(float)));
             float* d_conv_out;
-            cudaMalloc(&d_conv_out, p.out_c * N * outH * outW * sizeof(float));
+            CUDA_CHECK(cudaMalloc(&d_conv_out, p.out_c * N * outH * outW * sizeof(float)));
 
             im2col_forward(current_data, d_col, N, curr_c, curr_h, curr_w, p.kh, p.kw, outH, outW);
             gemm_forward(weights[i], d_col, d_conv_out, p.out_c, N * outH * outW, p.in_c * p.kh * p.kw);
@@ -61,22 +62,22 @@ public:
             // MaxPool every few layers
             if (i == 0 || i == 1 || i == 3 || i == 4) {
                 float* d_pool_out;
-                cudaMalloc(&d_pool_out, p.out_c * N * (outH/2) * (outW/2) * sizeof(float));
+                CUDA_CHECK(cudaMalloc(&d_pool_out, p.out_c * N * (outH/2) * (outW/2) * sizeof(float)));
                 apply_maxpool(d_conv_out, d_pool_out, N, p.out_c, outH, outW);
                 
-                if (current_data != d_input) cudaFree(current_data);
-                cudaFree(d_conv_out);
+                if (current_data != d_input) CUDA_CHECK(cudaFree(current_data));
+                CUDA_CHECK(cudaFree(d_conv_out));
                 current_data = d_pool_out;
                 curr_h /= 2; curr_w /= 2;
             } else {
-                if (current_data != d_input) cudaFree(current_data);
+                if (current_data != d_input) CUDA_CHECK(cudaFree(current_data));
                 current_data = d_conv_out;
             }
             
             curr_c = p.out_c;
             curr_h = (i == 0 || i == 1 || i == 3 || i == 4) ? curr_h : outH;
             curr_w = (i == 0 || i == 1 || i == 3 || i == 4) ? curr_w : outW;
-            cudaFree(d_col);
+            CUDA_CHECK(cudaFree(d_col));
         }
         return current_data;
     }

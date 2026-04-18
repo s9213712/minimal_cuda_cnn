@@ -1,4 +1,5 @@
 #include "tensor.h"
+#include "cuda_check.h"
 #include <cuda_runtime.h>
 #include <iostream>
 #include <vector>
@@ -56,20 +57,20 @@ extern "C" {
         int total_elements = (C * KH * KW) * (N * outH * outW);
         int tpb = 256;
         im2col_kernel<<<(total_elements + tpb - 1) / tpb, tpb>>>(d_input, d_output, N, C, H, W, KH, KW, outH, outW);
-        cudaDeviceSynchronize();
+        CUDA_KERNEL_CHECK();
     }
 
     void gemm_forward(float* d_A, float* d_B, float* d_C, int M, int N, int K) {
         dim3 block(16, 16);
         dim3 grid((N + 15) / 16, (M + 15) / 16);
         gemm_kernel<<<grid, block>>>(d_A, d_B, d_C, M, N, K);
-        cudaDeviceSynchronize();
+        CUDA_KERNEL_CHECK();
     }
 
     void apply_relu(float* d_data, int size) {
         int tpb = 256;
         relu_forward_kernel<<<(size + tpb - 1) / tpb, tpb>>>(d_data, size);
-        cudaDeviceSynchronize();
+        CUDA_KERNEL_CHECK();
     }
 
     void apply_maxpool(float* d_input, float* d_output, int n, int c, int h, int w) {
@@ -77,7 +78,7 @@ extern "C" {
         int size = n * c * out_h * out_w;
         int tpb = 256;
         maxpool_forward_kernel<<<(size + tpb - 1) / tpb, tpb>>>(d_input, d_output, n, c, h, w);
-        cudaDeviceSynchronize();
+        CUDA_KERNEL_CHECK();
     }
 
     // Layout conversion functions defined in layout_convert.cu

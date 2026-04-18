@@ -1,4 +1,5 @@
 #pragma once
+#include "cuda_check.h"
 #include "tensor.h"
 #include <cuda_runtime.h>
 #include <vector>
@@ -19,25 +20,25 @@ class ConvLayer : public Layer {
 public:
     ConvLayer(int in_c, int out_c, int kh, int kw) : in_c(in_c), out_c(out_c), kh(kh), kw(kw) {
         size_t size = (size_t)out_c * in_c * kh * kw * sizeof(float);
-        cudaMalloc(&d_weights, size);
-        cudaMalloc(&d_grad_weights, size);
-        cudaMemset(d_grad_weights, 0, size);
+        CUDA_CHECK(cudaMalloc(&d_weights, size));
+        CUDA_CHECK(cudaMalloc(&d_grad_weights, size));
+        CUDA_CHECK(cudaMemset(d_grad_weights, 0, size));
     }
     ~ConvLayer() { 
-        cudaFree(d_weights); 
-        cudaFree(d_grad_weights);
+        CUDA_CHECK(cudaFree(d_weights)); 
+        CUDA_CHECK(cudaFree(d_grad_weights));
     }
     
     void set_weights(const float* weights) {
         size_t size = (size_t)out_c * in_c * kh * kw * sizeof(float);
-        cudaMemcpy(d_weights, weights, size, cudaMemcpyHostToDevice);
+        CUDA_CHECK(cudaMemcpy(d_weights, weights, size, cudaMemcpyHostToDevice));
     }
     
     float* get_weights() { return d_weights; }
     float* get_grad_weights() { return d_grad_weights; }
     void clear_grads() {
         size_t size = (size_t)out_c * in_c * kh * kw * sizeof(float);
-        cudaMemset(d_grad_weights, 0, size);
+        CUDA_CHECK(cudaMemset(d_grad_weights, 0, size));
     }
     
     CudaTensor* forward(CudaTensor* input) override;

@@ -1,5 +1,6 @@
 #include "dense_layer.h"
 #include "tensor.h"
+#include "cuda_check.h"
 #include <cuda_runtime.h>
 
 __global__ void dense_forward_kernel(const float* input, const float* weights, const float* bias, float* output, int N, int in_f, int out_f) {
@@ -95,7 +96,7 @@ CudaTensor* DenseLayer::forward(CudaTensor* input) {
     dim3 grid((out_features + 15) / 16, (batch_size + 15) / 16);
     
     dense_forward_kernel<<<grid, block>>>(input->data, d_weights, d_bias, output->data, batch_size, total_in, out_features);
-    cudaDeviceSynchronize();
+    CUDA_KERNEL_CHECK();
     
     return output;
 }
@@ -105,7 +106,7 @@ extern "C" {
         dim3 block(16, 16);
         dim3 grid((out_f + 15) / 16, (N + 15) / 16);
         dense_forward_kernel<<<grid, block>>>(d_input, d_weights, d_bias, d_output, N, in_f, out_f);
-        cudaDeviceSynchronize();
+        CUDA_KERNEL_CHECK();
     }
 
     // FC backward - all on GPU, no CPU roundtrip
@@ -125,6 +126,6 @@ extern "C" {
 
         dense_backward_bias_kernel<<<(out_f + tpb-1) / tpb, tpb>>>(d_dout, d_dbias, N, out_f);
 
-        cudaDeviceSynchronize();
+        CUDA_KERNEL_CHECK();
     }
 }

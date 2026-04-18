@@ -1,3 +1,5 @@
+#include "cuda_check.h"
+
 __global__ void conv_backward_kernel(float* grad_out, float* input, float* weights, float* grad_weights, 
                                        int N, int C, int H, int W, int KH, int KW, int outH, int outW, int OUT_C) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -68,6 +70,6 @@ extern "C" {
         int total_in = N * C * H * W;
         conv_backward_input_kernel<<<(total_in + tpb - 1) / tpb, tpb>>>(grad_out, weights, grad_input, N, C, H, W, KH, KW, outH, outW, OUT_C);
         
-        cudaDeviceSynchronize();
+        CUDA_KERNEL_CHECK();
     }
 }

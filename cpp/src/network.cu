@@ -1,5 +1,6 @@
 #include "network.h"
 #include "tensor.h"
+#include "cuda_check.h"
 #include <iostream>
 #include <cuda_runtime.h>
 
@@ -18,7 +19,7 @@ CudaTensor* ConvLayer::forward(CudaTensor* input) {
     float* d_col;
     int col_rows = input->c * kh * kw;
     int col_cols = input->n * outH * outW;
-    cudaMalloc(&d_col, col_rows * col_cols * sizeof(float));
+    CUDA_CHECK(cudaMalloc(&d_col, col_rows * col_cols * sizeof(float)));
 
     // 1. Image -> Column (GPU)
     im2col_forward(input->data, d_col, input->n, input->c, input->h, input->w, kh, kw, outH, outW);
@@ -26,7 +27,7 @@ CudaTensor* ConvLayer::forward(CudaTensor* input) {
     // 2. GEMM: Output = Weights * Col (GPU)
     gemm_forward(d_weights, d_col, output->data, out_c, col_cols, col_rows);
 
-    cudaFree(d_col);
+    CUDA_CHECK(cudaFree(d_col));
     return output;
 }
 
@@ -36,14 +37,10 @@ CudaTensor* ReLULayer::forward(CudaTensor* input) {
     float* d_output = output->data;
     int size = input->n * input->c * input->h * input->w;
 
-    // Create a specific kernel for non-inplace ReLU to be safe
-    int tpb = 256;
-    int bpg = (size + tpb - 1) / tpb;
-    
     // We need a kernel that does: output[i] = fmaxf(0, input[i])
     // Since apply_relu is in-place, let's implement a copy-relu or just use a lambda/small kernel
     // For now, let's just perform a cudaMemcpy then apply_relu for correctness
-    cudaMemcpy(d_output, d_input, size * sizeof(float), cudaMemcpyDeviceToDevice);
+    CUDA_CHECK(cudaMemcpy(d_output, d_input, size * sizeof(float), cudaMemcpyDeviceToDevice));
     apply_relu(d_output, size);
     
     return output;

@@ -1,5 +1,7 @@
 #include <cuda_runtime.h>
 #include <cmath>
+#include <cstdlib>
+#include "cuda_check.h"
 
 // ============== Softmax CrossEntropy ==============
 __global__ void softmax_kernel(const float* input, float* output, int N, int features) {
@@ -33,9 +35,6 @@ __global__ void cross_entropy_backward_kernel(float* grad_out, float* probs, int
     int total = N * features;
     if (idx >= total) return;
     
-    int n = idx / features;
-    int j = idx % features;
-    
     // dL/dsoftmax = softmax - label (one-hot)
     // grad_out contains label (one-hot encoded)
     grad_out[idx] = (probs[idx] - grad_out[idx]);  // label[j=target] = 1, else 0
@@ -45,24 +44,18 @@ extern "C" {
     void softmax_forward(float* d_input, float* d_output, int N, int features) {
         int tpb = 256;
         softmax_kernel<<<N, tpb>>>(d_input, d_output, N, features);
-        cudaDeviceSynchronize();
+        CUDA_KERNEL_CHECK();
     }
     
     float softmax_cross_entropy(float* d_input, float* d_labels, float* d_probs, float* d_loss, int N, int features) {
         // Forward: softmax
         softmax_forward(d_input, d_probs, N, features);
-        
-        // Compute loss: -sum(label * log(probs))
-        dim3 block(256);
-        dim3 grid((N + 255) / 256);
-        cross_entropy_backward_kernel<<<grid, block>>>(d_labels, d_probs, N, features);
-        cudaDeviceSynchronize();
-        
+
         // Copy to host for loss computation
         float* h_probs = (float*)malloc(N * features * sizeof(float));
         float* h_labels = (float*)malloc(N * features * sizeof(float));
-        cudaMemcpy(h_probs, d_probs, N * features * sizeof(float), cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_labels, d_labels, N * features * sizeof(float), cudaMemcpyDeviceToHost);
+        CUDA_CHECK(cudaMemcpy(h_probs, d_probs, N * features * sizeof(float), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(h_labels, d_labels, N * features * sizeof(float), cudaMemcpyDeviceToHost));
         
         float loss = 0.0f;
         for (int i = 0; i < N; i++) {
@@ -76,14 +69,18 @@ extern "C" {
         
         free(h_probs);
         free(h_labels);
-        return loss / N;
+        loss /= N;
+        if (d_loss != nullptr) {
+            CUDA_CHECK(cudaMemcpy(d_loss, &loss, sizeof(float), cudaMemcpyHostToDevice));
+        }
+        return loss;
     }
     
     void softmax_backward(float* d_grad_out, float* d_probs, int N, int features) {
         dim3 block(256);
         dim3 grid((N * features + 255) / 256);
         cross_entropy_backward_kernel<<<grid, block>>>(d_grad_out, d_probs, N, features);
-        cudaDeviceSynchronize();
+        CUDA_KERNEL_CHECK();
     }
 }
 
@@ -120,7 +117,7 @@ extern "C" {
         int total = C * KH * KW * N * outH * outW;
         int tpb = 256;
         im2col_backward_kernel<<<(total + tpb - 1) / tpb, tpb>>>(d_grad_col, d_grad_input, N, C, H, W, KH, KW, outH, outW);
-        cudaDeviceSynchronize();
+        CUDA_KERNEL_CHECK();
     }
 }
 
@@ -163,6 +160,6 @@ extern "C" {
         grid.y = (K + 15) / 16;
         gemm_backward_B_kernel<<<grid, block>>>(d_A, d_grad_out, d_grad_B, M, N, K);
         
-        cudaDeviceSynchronize();
+        CUDA_KERNEL_CHECK();
     }
 }

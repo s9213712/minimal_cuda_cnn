@@ -1,3 +1,5 @@
+#include "cuda_check.h"
+
 __global__ void resnet_block_backward_kernel(float* grad_out, float* input, float* weights1, float* weights2,
                                               float* grad_weights1, float* grad_weights2, float* grad_input,
                                               float* skip_w, float* grad_skip_w,
@@ -85,6 +87,6 @@ extern "C" {
                 grad_out, grad_skip_w, N, C, H, W, outC, has_skip_conv);
         }
         
-        cudaDeviceSynchronize();
+        CUDA_KERNEL_CHECK();
     }
 }

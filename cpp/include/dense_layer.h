@@ -1,4 +1,5 @@
 #pragma once
+#include "cuda_check.h"
 #include "network.h"
 #include "tensor.h"
 #include <cuda_runtime.h>
@@ -11,12 +12,12 @@ class DenseLayer : public Layer {
     float* d_bias;
 public:
     DenseLayer(int in_f, int out_f) : in_features(in_f), out_features(out_f) {
-        cudaMalloc(&d_weights, in_f * out_f * sizeof(float));
-        cudaMalloc(&d_bias, out_f * sizeof(float));
+        CUDA_CHECK(cudaMalloc(&d_weights, in_f * out_f * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_bias, out_f * sizeof(float)));
     }
     ~DenseLayer() {
-        cudaFree(d_weights);
-        cudaFree(d_bias);
+        CUDA_CHECK(cudaFree(d_weights));
+        CUDA_CHECK(cudaFree(d_bias));
     }
     CudaTensor* forward(CudaTensor* input) override;
 };

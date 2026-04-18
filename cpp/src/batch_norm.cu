@@ -1,3 +1,5 @@
+#include "cuda_check.h"
+
 // Batch Normalization Forward (training mode)
 // input: (N, C, H, W)
 // Computes batch mean, variance, normalizes, and stores running stats
@@ -122,7 +124,7 @@ extern "C" {
         batch_norm_forward_kernel<<<C, tpb>>>(d_output, d_input, d_running_mean, d_running_var,
                                               d_saved_mean, d_saved_var, d_gamma, d_beta,
                                               momentum, eps, N, C, H, W, train);
-        cudaDeviceSynchronize();
+        CUDA_KERNEL_CHECK();
     }
 
     void batch_norm_backward(float* d_grad_input, float* d_grad_output,
@@ -132,12 +134,12 @@ extern "C" {
         int total = C * N * H * W;
         int tpb = 256;
         // Init grad_gamma and grad_beta to 0
-        cudaMemset(d_grad_gamma, 0, C * sizeof(float));
-        cudaMemset(d_grad_beta, 0, C * sizeof(float));
+        CUDA_CHECK(cudaMemset(d_grad_gamma, 0, C * sizeof(float)));
+        CUDA_CHECK(cudaMemset(d_grad_beta, 0, C * sizeof(float)));
         batch_norm_backward_kernel<<<(total + tpb - 1) / tpb, tpb>>>(d_grad_input, d_grad_output,
                                                                       d_input, d_saved_mean, d_saved_var,
                                                                       d_gamma, d_grad_gamma, d_grad_beta,
                                                                       eps, N, C, H, W);
-        cudaDeviceSynchronize();
+        CUDA_KERNEL_CHECK();
     }
 }

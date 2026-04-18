@@ -1,3 +1,5 @@
+#include "cuda_check.h"
+
 // Reorganize kernel: (OC, N_spatial) -> (N, OC, H, W)
 __global__ void reorganize_kernel(const float* input, float* output, int N, int C, int H, int W) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -21,4 +23,5 @@ extern "C" void reorganize_forward(const float* input, float* output, int N, int
     dim3 block(256);
     dim3 grid((N * C * H * W + 255) / 256);
     reorganize_kernel<<<grid, block>>>(input, output, N, C, H, W);
+    CUDA_KERNEL_CHECK();
 }

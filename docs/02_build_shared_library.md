@@ -1,0 +1,84 @@
+# 編譯 shared library
+
+本文說明如何從 `cpp/src/*.cu` 編譯出 `cpp/libminimal_cuda_cnn.so`。
+
+## 基本編譯
+
+在專案根目錄執行：
+
+```bash
+cd /home/s92137/NN/minimal_cuda_cnn
+make -C cpp
+```
+
+成功後會產生：
+
+```text
+cpp/libminimal_cuda_cnn.so
+```
+
+## 預設 Makefile 設定
+
+```makefile
+CC = /usr/local/cuda-13.2/bin/nvcc
+CFLAGS = -O3 -Xcompiler -fPIC -arch=sm_86
+LDFLAGS = -shared -o libminimal_cuda_cnn.so -Xlinker -rpath,/usr/local/cuda-13.2/lib64
+```
+
+目前預設 Makefile 會編進 `.so` 的 `.cu` 檔包含：
+
+```text
+core.cu, gpu_monitor.cu, network.cu, dense_layer.cu, backward.cu,
+memory.cu, loss_layer.cu, conv_backward.cu, optimizer.cu,
+reorganize.cu, reorganize_backward.cu, maxpool_backward_nchw.cu,
+leaky_relu.cu, layer_norm.cu, maxpool_store.cu,
+maxpool_backward_use_idx.cu, layout_convert.cu
+```
+
+`batch_norm.cu`、`alexnet.cu`、`resnet_backward.cu` 目前是保留的實驗/擴充檔案；若要匯出其中函式，需先加入 `cpp/Makefile` 的 nvcc 編譯命令。
+
+## GPU 架構參數
+
+如果你的 GPU 不是 Ampere/RTX 30 系列，可能需要修改 `-arch=sm_86`。
+
+| GPU 架構 | `-arch` |
+|---|---|
+| GTX 10 系列 Pascal | `sm_61` |
+| RTX 20 系列 Turing | `sm_75` |
+| RTX 30 系列 Ampere | `sm_86` |
+| RTX 40 系列 Ada | `sm_89` |
+
+## 檢查匯出符號
+
+```bash
+nm -D --defined-only cpp/libminimal_cuda_cnn.so
+```
+
+目前常用匯出符號包含：
+
+```text
+gpu_malloc, gpu_free, gpu_memcpy_h2d, gpu_memcpy_d2h, gpu_memset
+im2col_forward, gemm_forward, dense_forward
+conv_backward, dense_backward_full
+maxpool_forward_store, maxpool_backward_use_idx
+nchw_to_cnhw, cnhw_to_nchw
+leaky_relu_forward, leaky_relu_backward
+softmax_forward, softmax_cross_entropy, softmax_backward
+apply_sgd_update
+```
+
+## 清理與重編
+
+```bash
+make -C cpp clean
+make -C cpp
+```
+
+## CUDA memory check
+
+```bash
+cuda-memcheck python3 -u your_script.py
+```
+
+目前 `compute-sanitizer` 在部分 WSL/WDDM 環境可能會因 debugger interface 不支援而不能用；此環境下 `cuda-memcheck` 可正常檢查。
+

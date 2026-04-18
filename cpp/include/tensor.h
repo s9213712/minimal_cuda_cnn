@@ -1,4 +1,5 @@
 #pragma once
+#include "cuda_check.h"
 #include <cuda_runtime.h>
 #include <iostream>
 #include <vector>
@@ -11,19 +12,19 @@ struct CudaTensor {
 
     CudaTensor(int n, int c, int h, int w) : n(n), c(c), h(h), w(w) {
         total_size = (size_t)n * c * h * w * sizeof(float);
-        cudaMalloc(&data, total_size);
+        CUDA_CHECK(cudaMalloc(&data, total_size));
     }
 
     ~CudaTensor() {
-        cudaFree(data);
+        CUDA_CHECK(cudaFree(data));
     }
 
     void copy_from_host(const float* host_ptr) {
-        cudaMemcpy(data, host_ptr, total_size, cudaMemcpyHostToDevice);
+        CUDA_CHECK(cudaMemcpy(data, host_ptr, total_size, cudaMemcpyHostToDevice));
     }
 
     void copy_to_host(float* host_ptr) {
-        cudaMemcpy(host_ptr, data, total_size, cudaMemcpyDeviceToHost);
+        CUDA_CHECK(cudaMemcpy(host_ptr, data, total_size, cudaMemcpyDeviceToHost));
     }
 };
 
